@@ -15,7 +15,7 @@ This is an infrastructure feasibility prototype, not a trading product. See [doc
 
 ## Prerequisites
 
-- Go 1.21+
+- Go 1.25+ (bumped from the originally targeted 1.21+ by the SQLite driver's toolchain requirement — see [DECISIONS.md](docs/DECISIONS.md))
 - No database server required — storage is an embedded SQLite file (pure-Go driver, no cgo/C toolchain needed; see [DECISIONS.md](docs/DECISIONS.md))
 
 ## Configuration

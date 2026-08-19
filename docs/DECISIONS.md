@@ -46,6 +46,8 @@ Tooling and infrastructure choices for Project Equinox, and the tradeoffs behind
 
 **Consequences.** SQLite is free and has zero hosting cost — it's an embedded file, not a server. The one real tradeoff is driver choice: the standard `mattn/go-sqlite3` requires cgo, meaning anyone running the prototype needs a C toolchain installed. `modernc.org/sqlite` is a pure-Go port — marginally slower, irrelevant at this data volume — that makes `go build` work on a clean machine with zero setup friction. Given ease of evaluation is a real concern, that tradeoff is worth taking.
 
+One consequence discovered during implementation: `modernc.org/sqlite`'s current release requires Go 1.25+, which bumped this project's minimum from the originally stated Go 1.21+ (see README.md). This doesn't reintroduce the friction the driver choice was meant to avoid — `go build` auto-selects the newer toolchain via `GOTOOLCHAIN=auto` (the Go default since 1.21) with no manual install step — but it's noted here since it changes a previously stated prerequisite.
+
 ---
 
 ## Venue selection: Polymarket, Kalshi, Manifold (not PredictIt)
