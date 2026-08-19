@@ -18,6 +18,22 @@ Tooling and infrastructure choices for Project Equinox, and the tradeoffs behind
 
 ---
 
+## Embedding provider: OpenAI (`text-embedding-3-small`)
+
+**Context.** The equivalence matcher's composite score depends on a semantic similarity signal (60% of the score, see EQUIVALENCE.md), which requires an embedding model. The Language & Runtime decision above already established that this calls out to an external API rather than running in-process — it did not specify a provider.
+
+**Decision.** OpenAI's `text-embedding-3-small`, called via a plain HTTP POST, authenticated through an `OPENAI_API_KEY` environment variable referenced by `api_key_env` in `equinox.yaml` — the same pattern already used for Kalshi.
+
+**Alternatives considered.**
+- *Voyage AI* — comparably cheap and equally low-friction to integrate, but its models are tuned and benchmarked primarily for retrieval (matching a query against a large document corpus), the core operation behind RAG systems. Equivalence detection here is pairwise comparison between two short, already-prefiltered titles — closer to semantic textual similarity (STS) than retrieval. OpenAI's models are benchmarked directly on STS, a closer match to this task. Given there's no labeled dataset to empirically validate either choice against (see EQUIVALENCE.md), the more standard, better-documented option is also the easier one to defend in writing.
+- *Google Vertex AI embeddings* — would echo the brief's Go+GCP stack hint, but requires GCP project/service-account setup, reintroducing exactly the setup friction the pure-Go SQLite driver was chosen to avoid.
+- *Local/open-weight model* — zero API cost and fully offline, but reintroduces the local-ML-ecosystem gap that justified "calls out to an API" in the first place; Go has no strong local embedding tooling.
+- *Anthropic* — not applicable. Claude models are generative, not embedding models, and Anthropic has no first-party embeddings API. (Anthropic's own guidance for retrieval use cases points third parties to Voyage AI, which is covered above.)
+
+**Consequences.** Lowest setup friction of any hosted option (one API key, one REST call, no SDK dependency), negligible cost at this data volume, and no explanation burden in the writeup since it's the most standard choice available. The tradeoff is a third external dependency (OpenAI, alongside the Go/GCP-adjacent stack) with no direct connection to the project's stated internal stack — accepted because task fit and setup simplicity outweighed stack-consistency here.
+
+---
+
 ## Storage: SQLite
 
 **Context.** The system needs a canonical market model and an auditable decision trail (see ARCHITECTURE.md's state vs. events split). The brief explicitly deprioritizes infrastructure sophistication in favor of clarity.
