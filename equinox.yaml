@@ -1,0 +1,18 @@
+venues:
+  - name: polymarket
+    base_url: https://gamma-api.polymarket.com
+  - name: kalshi
+    base_url: https://trading-api.kalshi.com
+    api_key_env: KALSHI_API_KEY
+  - name: manifold
+    base_url: https://api.manifold.markets
+
+match:
+  min_score: 0.75
+  embedding:
+    provider: openai
+    model: text-embedding-3-small
+    api_key_env: OPENAI_API_KEY
+
+database:
+  path: ./equinox.db
