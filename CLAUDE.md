@@ -43,7 +43,7 @@ Do not restructure these directories without flagging it first.
 Run tests and `go vet` before every commit. Do not commit code that fails either.
 
 ## Environment & Secrets
-- Required env vars: `KALSHI_API_KEY`, `OPENAI_API_KEY` (referenced by name via `api_key_env` in `equinox.yaml`, never hardcoded). Manifold requires no auth — do not add unnecessary auth scaffolding for it.
+- Required env vars: `OPENAI_API_KEY` (referenced by name via `api_key_env` in `equinox.yaml`, never hardcoded). Manifold requires no auth — do not add unnecessary auth scaffolding for it. Kalshi's real auth is RSA-PSS request signing (Key ID + private key), not a bearer-token env var; its read-only market data endpoint works unauthenticated, so no Kalshi key is used either — see docs/DECISIONS.md.
 - Loaded from a local `.env` file via a small loader (e.g. `godotenv`). A `.env.example` file must stay up to date with every required variable, using placeholder values only.
 - Never commit `.env`, real API keys, or any credential value in any file, commit message, or PR description.
 

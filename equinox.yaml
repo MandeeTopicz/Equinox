@@ -2,8 +2,7 @@ venues:
   - name: polymarket
     base_url: https://gamma-api.polymarket.com
   - name: kalshi
-    base_url: https://trading-api.kalshi.com
-    api_key_env: KALSHI_API_KEY
+    base_url: https://api.elections.kalshi.com
   - name: manifold
     base_url: https://api.manifold.markets
 

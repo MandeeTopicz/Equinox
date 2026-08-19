@@ -64,6 +64,8 @@ One consequence discovered during implementation: `modernc.org/sqlite`'s current
 
 **Consequences.** Slightly more integration surface and a marginally harder matching problem (grouping across three sources instead of two), in exchange for a structural claim the project can actually back up rather than assert.
 
+**Kalshi auth, discovered during implementation.** Kalshi's real authentication scheme is RSA-PSS request signing (a Key ID plus a private key, with `KALSHI-ACCESS-KEY`/`KALSHI-ACCESS-SIGNATURE`/`KALSHI-ACCESS-TIMESTAMP` headers computed per request) — not a bearer token that fits the `api_key_env` pattern used for OpenAI. Separately, Kalshi's read-only market data endpoint (`GET /trade-api/v2/markets`) works fully unauthenticated. Since `fetch` only ever reads market data, the Kalshi client uses no authentication at all rather than implementing RSA-PSS signing for endpoints this prototype doesn't call — consistent with the project's low-setup-friction bias elsewhere (SQLite driver, embedding provider), and it means Kalshi needs no API key, same as Manifold. `KALSHI_API_KEY` was removed from `.env.example`, `equinox.yaml`, and CLAUDE.md's required-env-vars list accordingly. (Also discovered in the same pass: the originally documented base URL, `trading-api.kalshi.com`, has been retired in favor of `api.elections.kalshi.com` — updated in `equinox.yaml` and README.)
+
 ---
 
 ## CLI & output design
