@@ -1,0 +1,12 @@
+# Secrets
+.env
+
+# Build output
+/equinox
+
+# Local database
+*.db
+*.db-journal
+
+# Go
+/vendor/
