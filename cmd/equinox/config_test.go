@@ -17,7 +17,7 @@ func TestLoadConfig(t *testing.T) {
 		apiKeyEnv string
 	}{
 		"polymarket": {"https://gamma-api.polymarket.com", ""},
-		"kalshi":     {"https://trading-api.kalshi.com", "KALSHI_API_KEY"},
+		"kalshi":     {"https://api.elections.kalshi.com", ""},
 		"manifold":   {"https://api.manifold.markets", ""},
 	}
 
