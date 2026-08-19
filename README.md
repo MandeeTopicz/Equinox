@@ -34,12 +34,16 @@ venues:
 
 match:
   min_score: 0.75
+  embedding:
+    provider: openai
+    model: text-embedding-3-small
+    api_key_env: OPENAI_API_KEY
 
 database:
   path: ./equinox.db
 ```
 
-API keys, where required, are read from the environment variable named in `api_key_env` — never committed to the config file.
+API keys, where required, are read from the environment variable named in `api_key_env` — never committed to the config file. See [docs/DECISIONS.md](docs/DECISIONS.md) for why OpenAI was chosen as the embedding provider.
 
 ## Build
 
