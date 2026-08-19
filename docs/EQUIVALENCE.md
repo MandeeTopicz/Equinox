@@ -21,11 +21,11 @@ A false negative (missing a real equivalence) leaves the system incomplete — a
 
 | Signal | Weight | Why |
 |---|---|---|
-| Title/description semantic similarity (embedding cosine) | 0.60 | Catches paraphrased or reworded titles that pure string matching misses — the main gap rule-based matching alone leaves open |
+| Title/description semantic similarity (OpenAI `text-embedding-3-small` cosine similarity) | 0.60 | Catches paraphrased or reworded titles that pure string matching misses — the main gap rule-based matching alone leaves open |
 | Resolution-date alignment (normalized closeness within the tolerance window) | 0.25 | Deterministic, cheap, and a strong disambiguating signal on its own |
 | Category/tag match | 0.15 | Weak on its own (categories are coarse) but useful as a tie-breaker |
 
-The composite score lands in `[0, 1]`. Every score is logged with the individual signal values that produced it — the rationale is the breakdown, not just the final number.
+The composite score lands in `[0, 1]`. Every score is logged with the individual signal values that produced it — the rationale is the breakdown, not just the final number. See [DECISIONS.md](DECISIONS.md) for why OpenAI was chosen as the embedding provider over the alternatives considered.
 
 ## Default threshold: `--min-score 0.75`
 
