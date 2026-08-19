@@ -8,4 +8,4 @@ AI is used in exactly one place in the running system: the equivalence matcher's
 
 ## In research and development
 
-AI tools were used throughout the design and development of this project — for working through architectural tradeoffs, and for implementation assistance. This is disclosed at that level rather than broken down conversation-by-conversation or line-by-line; the runtime usage described above is the disclosure that materially affects how the system behaves, and is documented in full.
+AI tools were used throughout the design and development of this project — for working through architectural tradeoffs, and for implementation assistance. 
