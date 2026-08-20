@@ -47,15 +47,33 @@ func run(command string, args []string) error {
 		return runMatch(cfg, args)
 	case "route":
 		return runRoute(cfg, args)
+	case "run":
+		return runRun(cfg, args)
 	default:
 		return fmt.Errorf("unknown command: %s", command)
 	}
 }
 
-func runFetch(cfg *Config) error {
+func openStore(cfg *Config) (*store.Store, error) {
 	st, err := store.Open(cfg.Database.Path)
 	if err != nil {
-		return fmt.Errorf("opening database: %w", err)
+		return nil, fmt.Errorf("opening database: %w", err)
+	}
+	return st, nil
+}
+
+func newEmbedder(cfg *Config) (match.Embedder, error) {
+	apiKey, err := cfg.Match.Embedding.APIKey()
+	if err != nil {
+		return nil, err
+	}
+	return match.NewOpenAIEmbeddingClient(apiKey, cfg.Match.Embedding.Model, &http.Client{Timeout: httpClientTimeout}), nil
+}
+
+func runFetch(cfg *Config) error {
+	st, err := openStore(cfg)
+	if err != nil {
+		return err
 	}
 	defer st.Close()
 
@@ -74,17 +92,16 @@ func runMatch(cfg *Config, args []string) error {
 		return err
 	}
 
-	st, err := store.Open(cfg.Database.Path)
-	if err != nil {
-		return fmt.Errorf("opening database: %w", err)
-	}
-	defer st.Close()
-
-	apiKey, err := cfg.Match.Embedding.APIKey()
+	st, err := openStore(cfg)
 	if err != nil {
 		return err
 	}
-	embedder := match.NewOpenAIEmbeddingClient(apiKey, cfg.Match.Embedding.Model, &http.Client{Timeout: httpClientTimeout})
+	defer st.Close()
+
+	embedder, err := newEmbedder(cfg)
+	if err != nil {
+		return err
+	}
 
 	return cli.Match(context.Background(), cli.MatchDeps{
 		Store:      st,
@@ -107,11 +124,50 @@ func runRoute(cfg *Config, args []string) error {
 		return fmt.Errorf("--event is required (see `equinox show matches` for available event ids)")
 	}
 
-	st, err := store.Open(cfg.Database.Path)
+	st, err := openStore(cfg)
 	if err != nil {
-		return fmt.Errorf("opening database: %w", err)
+		return err
 	}
 	defer st.Close()
 
 	return cli.Route(context.Background(), cli.RouteDeps{Store: st, Out: os.Stdout}, *event, *side, float64(*size))
+}
+
+func runRun(cfg *Config, args []string) error {
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	event := fs.String("event", "", "match-group event id; if omitted, defaults to the highest-confidence match found")
+	side := fs.String("side", "yes", `"yes" or "no"`)
+	size := fs.Int("size", 100, "hypothetical contract count")
+	minScore := fs.Float64("min-score", cfg.Match.MinScore, "minimum composite score to consider two markets equivalent")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	st, err := openStore(cfg)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	clients, err := buildVenueClients(cfg)
+	if err != nil {
+		return err
+	}
+
+	embedder, err := newEmbedder(cfg)
+	if err != nil {
+		return err
+	}
+
+	return cli.Run(context.Background(), cli.RunDeps{
+		Venues:     clients,
+		Store:      st,
+		Embedder:   embedder,
+		MinScore:   *minScore,
+		DateWindow: match.DefaultDateWindow,
+		Event:      *event,
+		Side:       *side,
+		Size:       float64(*size),
+		Out:        os.Stdout,
+	})
 }
