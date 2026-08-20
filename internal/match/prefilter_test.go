@@ -97,3 +97,27 @@ func TestPrefilterCustomDateWindow(t *testing.T) {
 		t.Error("expected a 3h window to accept a 2h date gap")
 	}
 }
+
+// TestPrefilterExtremeDateGapDoesNotOverflow is a regression test for a bug
+// found against live data: a real Manifold market resolves in the year
+// 4133 ("will X ever happen" style question). Comparing it against a
+// normal near-term date overflows time.Duration in the naive
+// "subtract-then-negate" approach to computing an absolute difference,
+// producing a huge *negative* value that made the date gate (and
+// dateAlignment) pass when it very much should not have. See
+// absDateDiff's doc comment.
+func TestPrefilterExtremeDateGapDoesNotOverflow(t *testing.T) {
+	near := time.Date(2026, 3, 19, 0, 0, 0, 0, time.UTC)
+	farFuture := time.Date(4133, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	got := Prefilter(marketAt("polymarket", "", near), marketAt("kalshi", "", farFuture), DefaultDateWindow)
+	if got.DateWithinWindow || got.Passed {
+		t.Errorf("expected an extreme date gap to fail the window gate, got %+v", got)
+	}
+
+	// Also exercise the reverse direction (earlier-vs-later swapped).
+	got = Prefilter(marketAt("polymarket", "", farFuture), marketAt("kalshi", "", near), DefaultDateWindow)
+	if got.DateWithinWindow || got.Passed {
+		t.Errorf("expected an extreme date gap (reversed) to fail the window gate, got %+v", got)
+	}
+}

@@ -4,10 +4,13 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
+	"net/http"
 	"os"
 
 	"equinox/internal/cli"
+	"equinox/internal/match"
 	"equinox/internal/store"
 )
 
@@ -40,6 +43,8 @@ func run(command string, args []string) error {
 	switch command {
 	case "fetch":
 		return runFetch(cfg)
+	case "match":
+		return runMatch(cfg, args)
 	default:
 		return fmt.Errorf("unknown command: %s", command)
 	}
@@ -58,4 +63,32 @@ func runFetch(cfg *Config) error {
 	}
 
 	return cli.Fetch(context.Background(), cli.FetchDeps{Venues: clients, Store: st, Out: os.Stdout})
+}
+
+func runMatch(cfg *Config, args []string) error {
+	fs := flag.NewFlagSet("match", flag.ContinueOnError)
+	minScore := fs.Float64("min-score", cfg.Match.MinScore, "minimum composite score to consider two markets equivalent")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	st, err := store.Open(cfg.Database.Path)
+	if err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer st.Close()
+
+	apiKey, err := cfg.Match.Embedding.APIKey()
+	if err != nil {
+		return err
+	}
+	embedder := match.NewOpenAIEmbeddingClient(apiKey, cfg.Match.Embedding.Model, &http.Client{Timeout: httpClientTimeout})
+
+	return cli.Match(context.Background(), cli.MatchDeps{
+		Store:      st,
+		Embedder:   embedder,
+		MinScore:   *minScore,
+		DateWindow: match.DefaultDateWindow,
+		Out:        os.Stdout,
+	})
 }

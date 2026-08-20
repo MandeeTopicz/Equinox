@@ -6,7 +6,6 @@ import (
 	"io"
 	"strings"
 
-	"equinox/internal/normalize"
 	"equinox/internal/store"
 	"equinox/internal/venue"
 )
@@ -84,20 +83,4 @@ func Fetch(ctx context.Context, deps FetchDeps) error {
 	}
 
 	return nil
-}
-
-func toStoreCanonicalMarket(m normalize.Market) store.CanonicalMarket {
-	return store.CanonicalMarket{
-		ID:             m.ID,
-		Venue:          m.Venue,
-		VenueMarketID:  m.VenueMarketID,
-		Title:          m.Title,
-		Description:    m.Description,
-		Category:       m.Category,
-		ResolutionDate: m.ResolutionDate,
-		YesPrice:       m.YesPrice,
-		NoPrice:        m.NoPrice,
-		Liquidity:      m.Liquidity,
-		FetchedAt:      m.FetchedAt,
-	}
 }
