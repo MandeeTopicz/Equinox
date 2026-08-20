@@ -49,6 +49,8 @@ func run(command string, args []string) error {
 		return runRoute(cfg, args)
 	case "run":
 		return runRun(cfg, args)
+	case "show":
+		return runShow(cfg, args)
 	default:
 		return fmt.Errorf("unknown command: %s", command)
 	}
@@ -170,4 +172,49 @@ func runRun(cfg *Config, args []string) error {
 		Size:       float64(*size),
 		Out:        os.Stdout,
 	})
+}
+
+func runShow(cfg *Config, args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: equinox show <markets|matches|decisions> [flags]")
+	}
+	subcommand, rest := args[0], args[1:]
+
+	st, err := openStore(cfg)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	switch subcommand {
+	case "markets":
+		fs := flag.NewFlagSet("show markets", flag.ContinueOnError)
+		venueFilter := fs.String("venue", "", "filter to one venue")
+		jsonOutput := fs.Bool("json", false, "output as JSON")
+		if err := fs.Parse(rest); err != nil {
+			return err
+		}
+		return cli.ShowMarkets(context.Background(), st, os.Stdout, *venueFilter, *jsonOutput)
+
+	case "matches":
+		fs := flag.NewFlagSet("show matches", flag.ContinueOnError)
+		eventFilter := fs.String("event", "", "filter to one event id")
+		jsonOutput := fs.Bool("json", false, "output as JSON")
+		if err := fs.Parse(rest); err != nil {
+			return err
+		}
+		return cli.ShowMatches(context.Background(), st, os.Stdout, *eventFilter, *jsonOutput)
+
+	case "decisions":
+		fs := flag.NewFlagSet("show decisions", flag.ContinueOnError)
+		eventFilter := fs.String("event", "", "filter to one event id")
+		jsonOutput := fs.Bool("json", false, "output as JSON")
+		if err := fs.Parse(rest); err != nil {
+			return err
+		}
+		return cli.ShowDecisions(context.Background(), st, os.Stdout, *eventFilter, *jsonOutput)
+
+	default:
+		return fmt.Errorf("unknown show subcommand: %s (want markets, matches, or decisions)", subcommand)
+	}
 }
