@@ -34,12 +34,7 @@ type PrefilterResult struct {
 //     EQUIVALENCE.md's "where venue metadata provides one"
 func Prefilter(a, b normalize.Market, dateWindow time.Duration) PrefilterResult {
 	differentVenues := a.Venue != b.Venue
-
-	dateDiff := a.ResolutionDate.Sub(b.ResolutionDate)
-	if dateDiff < 0 {
-		dateDiff = -dateDiff
-	}
-	dateWithinWindow := dateDiff <= dateWindow
+	dateWithinWindow := absDateDiff(a.ResolutionDate, b.ResolutionDate) <= dateWindow
 
 	categoryMatch := a.Category == "" || b.Category == "" || strings.EqualFold(a.Category, b.Category)
 
@@ -49,4 +44,20 @@ func Prefilter(a, b normalize.Market, dateWindow time.Duration) PrefilterResult 
 		CategoryMatch:    categoryMatch,
 		DateWithinWindow: dateWithinWindow,
 	}
+}
+
+// absDateDiff returns the non-negative gap between two times. It always
+// subtracts in the later-minus-earlier direction rather than subtracting
+// and then negating a possibly-negative result: time.Time.Sub clamps to
+// time.Duration's minimum representable value for a sufficiently large gap
+// (some real markets resolve centuries out — e.g. "will X ever happen"
+// questions), and negating that minimum value overflows back to itself
+// under Go's signed two's complement arithmetic, silently producing a
+// large *negative* "absolute" difference instead of a large positive one.
+// Always computing the non-negative direction avoids that entirely.
+func absDateDiff(a, b time.Time) time.Duration {
+	if a.Before(b) {
+		return b.Sub(a)
+	}
+	return a.Sub(b)
 }
