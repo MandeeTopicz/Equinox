@@ -21,7 +21,7 @@ For every venue in the matched group, the router reads only canonical fields tha
 
 The router never branches on venue identity or name. It selects the venue with the best effective price for the requested side among venues whose liquidity proxy plausibly supports the requested size; ties are broken on higher liquidity. This is a deliberately simple, deterministic rule — the objective is demonstrating the reasoning and structure of a routing decision, not optimizing execution quality (see Out of scope, below).
 
-If `--event` refers to a market with no match group (nothing cleared the equivalence threshold against it), routing has nothing to compare against; this is logged as a single-venue no-op decision rather than treated as an error.
+If `--event` refers to a market with no match group (nothing cleared the equivalence threshold against it), routing has nothing to compare against; this is logged as a single-venue no-op decision rather than treated as an error. Concretely: `route --event <id>` first looks up `<id>` as a match-group event id; if none exists, it falls back to treating `<id>` as a raw canonical market id (`venue:venue_market_id`, discoverable via `equinox show markets`) and, if that resolves, logs a no-op decision for that single venue — nothing selected, since there's nothing to compare against, just a record that routing was attempted. If neither resolves, `<id>` doesn't refer to anything real and that *is* an error.
 
 ## Rationale format
 
