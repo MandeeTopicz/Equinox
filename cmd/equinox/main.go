@@ -45,6 +45,8 @@ func run(command string, args []string) error {
 		return runFetch(cfg)
 	case "match":
 		return runMatch(cfg, args)
+	case "route":
+		return runRoute(cfg, args)
 	default:
 		return fmt.Errorf("unknown command: %s", command)
 	}
@@ -91,4 +93,25 @@ func runMatch(cfg *Config, args []string) error {
 		DateWindow: match.DefaultDateWindow,
 		Out:        os.Stdout,
 	})
+}
+
+func runRoute(cfg *Config, args []string) error {
+	fs := flag.NewFlagSet("route", flag.ContinueOnError)
+	event := fs.String("event", "", "match-group event id (see `equinox show matches`)")
+	side := fs.String("side", "", `"yes" or "no"`)
+	size := fs.Int("size", 0, "hypothetical contract count")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *event == "" {
+		return fmt.Errorf("--event is required (see `equinox show matches` for available event ids)")
+	}
+
+	st, err := store.Open(cfg.Database.Path)
+	if err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer st.Close()
+
+	return cli.Route(context.Background(), cli.RouteDeps{Store: st, Out: os.Stdout}, *event, *side, float64(*size))
 }
