@@ -18,6 +18,14 @@ import (
 // markets, consistent with the fetch scoping assumption in
 // docs/ARCHITECTURE.md; a production system would need pagination to go
 // further.
+//
+// That one page is sorted by 24h volume (highest first), not left at the
+// API's default order. Polymarket's unordered default happened to surface
+// an unrepresentative slice during development — 98 of 100 markets were a
+// single "who wins the 2028 election" topic cluster — while volume is also
+// the signal most likely to select markets with a real cross-venue
+// counterpart: thin, low-activity markets are unlikely to be independently
+// listed on multiple platforms.
 const polymarketPageSize = 100
 
 // PolymarketClient fetches markets from Polymarket's Gamma API. Polymarket
@@ -56,7 +64,7 @@ type polymarketMarket struct {
 }
 
 func (c *PolymarketClient) FetchMarkets(ctx context.Context) ([]FetchedMarket, error) {
-	url := fmt.Sprintf("%s/markets?active=true&closed=false&limit=%d", c.baseURL, polymarketPageSize)
+	url := fmt.Sprintf("%s/markets?active=true&closed=false&limit=%d&order=volume24hr&ascending=false", c.baseURL, polymarketPageSize)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
