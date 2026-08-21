@@ -64,7 +64,7 @@ func TestPolymarketFetchMarkets(t *testing.T) {
 		t.Fatalf("FetchMarkets: %v", err)
 	}
 
-	if gotPath != "/markets?active=true&closed=false&limit=100" {
+	if gotPath != "/markets?active=true&closed=false&limit=100&order=volume24hr&ascending=false" {
 		t.Errorf("unexpected request path/query: %s", gotPath)
 	}
 
