@@ -46,6 +46,15 @@ func TestLoadConfig(t *testing.T) {
 	if cfg.Match.Embedding.APIKeyEnv != "OPENAI_API_KEY" {
 		t.Errorf("match.embedding.api_key_env = %q, want OPENAI_API_KEY", cfg.Match.Embedding.APIKeyEnv)
 	}
+	if cfg.Match.EntityExtraction.Provider != "openai" {
+		t.Errorf("match.entity_extraction.provider = %q, want openai", cfg.Match.EntityExtraction.Provider)
+	}
+	if cfg.Match.EntityExtraction.Model != "gpt-4o-mini" {
+		t.Errorf("match.entity_extraction.model = %q, want gpt-4o-mini", cfg.Match.EntityExtraction.Model)
+	}
+	if cfg.Match.EntityExtraction.APIKeyEnv != "OPENAI_API_KEY" {
+		t.Errorf("match.entity_extraction.api_key_env = %q, want OPENAI_API_KEY", cfg.Match.EntityExtraction.APIKeyEnv)
+	}
 
 	if cfg.Database.Path != "./equinox.db" {
 		t.Errorf("database.path = %q, want ./equinox.db", cfg.Database.Path)

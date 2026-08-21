@@ -72,6 +72,14 @@ func newEmbedder(cfg *Config) (match.Embedder, error) {
 	return match.NewOpenAIEmbeddingClient(apiKey, cfg.Match.Embedding.Model, &http.Client{Timeout: httpClientTimeout}), nil
 }
 
+func newEntityExtractor(cfg *Config) (match.EntityExtractor, error) {
+	apiKey, err := cfg.Match.EntityExtraction.APIKey()
+	if err != nil {
+		return nil, err
+	}
+	return match.NewOpenAIEntityExtractor(apiKey, cfg.Match.EntityExtraction.Model, &http.Client{Timeout: httpClientTimeout}), nil
+}
+
 func runFetch(cfg *Config) error {
 	st, err := openStore(cfg)
 	if err != nil {
@@ -90,6 +98,7 @@ func runFetch(cfg *Config) error {
 func runMatch(cfg *Config, args []string) error {
 	fs := flag.NewFlagSet("match", flag.ContinueOnError)
 	minScore := fs.Float64("min-score", cfg.Match.MinScore, "minimum composite score to consider two markets equivalent")
+	verbose := fs.Bool("verbose", false, "print a trace of every candidate pair considered, including gate rejections")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -104,12 +113,18 @@ func runMatch(cfg *Config, args []string) error {
 	if err != nil {
 		return err
 	}
+	extractor, err := newEntityExtractor(cfg)
+	if err != nil {
+		return err
+	}
 
 	return cli.Match(context.Background(), cli.MatchDeps{
 		Store:      st,
 		Embedder:   embedder,
+		Extractor:  extractor,
 		MinScore:   *minScore,
 		DateWindow: match.DefaultDateWindow,
+		Verbose:    *verbose,
 		Out:        os.Stdout,
 	})
 }
@@ -160,11 +175,16 @@ func runRun(cfg *Config, args []string) error {
 	if err != nil {
 		return err
 	}
+	extractor, err := newEntityExtractor(cfg)
+	if err != nil {
+		return err
+	}
 
 	return cli.Run(context.Background(), cli.RunDeps{
 		Venues:     clients,
 		Store:      st,
 		Embedder:   embedder,
+		Extractor:  extractor,
 		MinScore:   *minScore,
 		DateWindow: match.DefaultDateWindow,
 		Event:      *event,

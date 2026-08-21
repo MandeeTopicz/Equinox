@@ -25,6 +25,7 @@ type RunDeps struct {
 	Venues     []venue.VenueClient
 	Store      RunStore
 	Embedder   match.Embedder
+	Extractor  match.EntityExtractor
 	MinScore   float64
 	DateWindow time.Duration
 	Event      string // optional; empty means auto-select the highest-confidence match
@@ -47,7 +48,7 @@ func Run(ctx context.Context, deps RunDeps) error {
 	}
 
 	if err := Match(ctx, MatchDeps{
-		Store: deps.Store, Embedder: deps.Embedder, MinScore: deps.MinScore, DateWindow: deps.DateWindow, Out: deps.Out,
+		Store: deps.Store, Embedder: deps.Embedder, Extractor: deps.Extractor, MinScore: deps.MinScore, DateWindow: deps.DateWindow, Out: deps.Out,
 	}); err != nil {
 		return err
 	}

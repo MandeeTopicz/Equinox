@@ -22,8 +22,10 @@ type MatchStore interface {
 type MatchDeps struct {
 	Store      MatchStore
 	Embedder   match.Embedder
+	Extractor  match.EntityExtractor
 	MinScore   float64
 	DateWindow time.Duration
+	Verbose    bool // print a per-candidate-pair trace, including gate rejections
 	Out        io.Writer
 }
 
@@ -59,9 +61,13 @@ func Match(ctx context.Context, deps MatchDeps) error {
 		markets = append(markets, toNormalizeMarket(r))
 	}
 
-	groups, err := match.Match(ctx, markets, deps.Embedder, deps.MinScore, deps.DateWindow)
+	groups, traces, err := match.Match(ctx, markets, deps.Embedder, deps.Extractor, deps.MinScore, deps.DateWindow)
 	if err != nil {
 		return fmt.Errorf("matching: %w", err)
+	}
+
+	if deps.Verbose {
+		printMatchTrace(deps.Out, traces)
 	}
 
 	now := time.Now().UTC()
@@ -107,4 +113,20 @@ func Match(ctx context.Context, deps MatchDeps) error {
 
 	fmt.Fprintf(deps.Out, "matched %d cross-venue groups (min-score %.2f)\n", len(groups), deps.MinScore)
 	return nil
+}
+
+// printMatchTrace prints one line per candidate pair for --verbose:
+// ephemeral, this run only — not persisted (see docs/EQUIVALENCE.md).
+func printMatchTrace(out io.Writer, traces []match.Trace) {
+	for _, t := range traces {
+		fmt.Fprintf(out, "checked: %s vs %s\n", t.A.ID, t.B.ID)
+		switch {
+		case t.Reason != "":
+			fmt.Fprintf(out, "  rejected: %s\n", t.Reason)
+		case t.Passed:
+			fmt.Fprintf(out, "  matched: score %.2f\n", t.Score)
+		default:
+			fmt.Fprintf(out, "  below threshold: score %.2f\n", t.Score)
+		}
+	}
 }

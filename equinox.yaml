@@ -12,6 +12,10 @@ match:
     provider: openai
     model: text-embedding-3-small
     api_key_env: OPENAI_API_KEY
+  entity_extraction:
+    provider: openai
+    model: gpt-4o-mini
+    api_key_env: OPENAI_API_KEY
 
 database:
   path: ./equinox.db
