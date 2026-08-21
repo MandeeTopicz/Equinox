@@ -23,6 +23,16 @@ func (f fakeMatchEmbedder) Embed(ctx context.Context, texts []string) ([][]float
 	return out, nil
 }
 
+// fakeMatchEntityExtractor returns no entities for anything by default —
+// the zero value never blocks a candidate pair on the entity gate.
+type fakeMatchEntityExtractor struct {
+	byText map[string][]string
+}
+
+func (f fakeMatchEntityExtractor) ExtractEntities(ctx context.Context, text string) ([]string, error) {
+	return f.byText[text], nil
+}
+
 type fakeMatchStore struct {
 	markets   []store.CanonicalMarket
 	inserted  []store.MatchDecision
@@ -58,7 +68,7 @@ func TestMatchCommandInsertsGroupsAndPrintsSummary(t *testing.T) {
 	var out bytes.Buffer
 
 	err := Match(context.Background(), MatchDeps{
-		Store: st, Embedder: embedder, MinScore: 0.75, DateWindow: match.DefaultDateWindow, Out: &out,
+		Store: st, Embedder: embedder, Extractor: fakeMatchEntityExtractor{}, MinScore: 0.75, DateWindow: match.DefaultDateWindow, Out: &out,
 	})
 	if err != nil {
 		t.Fatalf("Match: %v", err)
@@ -93,7 +103,7 @@ func TestMatchCommandNoMarketsYet(t *testing.T) {
 	st := &fakeMatchStore{}
 	var out bytes.Buffer
 
-	err := Match(context.Background(), MatchDeps{Store: st, Embedder: fakeMatchEmbedder{}, MinScore: 0.75, DateWindow: match.DefaultDateWindow, Out: &out})
+	err := Match(context.Background(), MatchDeps{Store: st, Embedder: fakeMatchEmbedder{}, Extractor: fakeMatchEntityExtractor{}, MinScore: 0.75, DateWindow: match.DefaultDateWindow, Out: &out})
 	if err != nil {
 		t.Fatalf("Match: %v", err)
 	}
@@ -125,7 +135,7 @@ func TestMatchCommandDedupesSlugsWithinOneRun(t *testing.T) {
 	}}
 	var out bytes.Buffer
 
-	err := Match(context.Background(), MatchDeps{Store: st, Embedder: embedder, MinScore: 0.75, DateWindow: match.DefaultDateWindow, Out: &out})
+	err := Match(context.Background(), MatchDeps{Store: st, Embedder: embedder, Extractor: fakeMatchEntityExtractor{}, MinScore: 0.75, DateWindow: match.DefaultDateWindow, Out: &out})
 	if err != nil {
 		t.Fatalf("Match: %v", err)
 	}

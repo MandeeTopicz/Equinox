@@ -21,11 +21,20 @@ type VenueConfig struct {
 }
 
 type MatchConfig struct {
-	MinScore  float64         `yaml:"min_score"`
-	Embedding EmbeddingConfig `yaml:"embedding"`
+	MinScore         float64                `yaml:"min_score"`
+	Embedding        EmbeddingConfig        `yaml:"embedding"`
+	EntityExtraction EntityExtractionConfig `yaml:"entity_extraction"`
 }
 
 type EmbeddingConfig struct {
+	Provider  string `yaml:"provider"`
+	Model     string `yaml:"model"`
+	APIKeyEnv string `yaml:"api_key_env"`
+}
+
+// EntityExtractionConfig configures the deterministic entity gate's
+// narrow, extraction-only LLM call (see docs/AI_USAGE.md).
+type EntityExtractionConfig struct {
 	Provider  string `yaml:"provider"`
 	Model     string `yaml:"model"`
 	APIKeyEnv string `yaml:"api_key_env"`
@@ -73,6 +82,19 @@ func (e EmbeddingConfig) APIKey() (string, error) {
 	key := os.Getenv(e.APIKeyEnv)
 	if key == "" {
 		return "", fmt.Errorf("environment variable %s is not set (required for embedding provider)", e.APIKeyEnv)
+	}
+	return key, nil
+}
+
+// APIKey resolves the entity extraction provider's API key from the
+// environment variable named in api_key_env.
+func (e EntityExtractionConfig) APIKey() (string, error) {
+	if e.APIKeyEnv == "" {
+		return "", fmt.Errorf("entity_extraction config has no api_key_env set")
+	}
+	key := os.Getenv(e.APIKeyEnv)
+	if key == "" {
+		return "", fmt.Errorf("environment variable %s is not set (required for entity extraction)", e.APIKeyEnv)
 	}
 	return key, nil
 }
