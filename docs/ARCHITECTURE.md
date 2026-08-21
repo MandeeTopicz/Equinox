@@ -51,7 +51,10 @@ equinox show decisions [--event <id>]                # read routing_decisions
 
 Command semantics and defaults:
 
-- `fetch` scopes to active/open markets by default — unbounded ingestion of every market a venue has ever listed isn't tractable for a prototype. Category or closing-date filters narrow this further. This is a documented scoping assumption, not a hidden limitation: a production system would need pagination/streaming to go further.
+- `fetch` scopes to active/open markets by default — unbounded ingestion of every market a venue has ever listed isn't tractable for a prototype. This is a documented scoping assumption, not a hidden limitation: a production system would need true pagination/streaming to go further. Within that assumption, each venue client scopes its one bounded fetch differently, per venue-specific tradeoffs discovered during development (see `internal/venue`'s doc comments and [DECISIONS.md](DECISIONS.md)):
+  - Polymarket: one page (its observed cap), ordered by 24h volume — the API's default order surfaced an unrepresentative single-topic slice during development, and volume also selects for markets most likely to have a real cross-venue counterpart.
+  - Kalshi: a bounded handful of pages (still not unbounded) plus a small, disclosed list of specific known-relevant series fetched explicitly — Kalshi's `/events` endpoint has no relevance/activity sort or filter of any kind, so blind pagination alone cannot reliably reach a specific real event without an impractically deep page count.
+  - Manifold: one page, already reasonably diverse without further scoping.
 - `match --min-score` defaults to `0.75`; see [EQUIVALENCE.md](EQUIVALENCE.md) for how that number was chosen.
 - `route --event` has no default. Routing an unspecified market is treated as a real ambiguity, not something to silently guess. `run` invoked without `--event` completes fetch+match and either stops with a pointer to the discovered match groups, or — for one-command demoability — auto-selects the highest-confidence group and explicitly logs that it did so (e.g. `no --event given, defaulting to highest-confidence match: <id>, score 0.91`).
 - Any `show` command run before its upstream pipeline step has produced data returns an explicit "no data yet — run `equinox fetch`" style message rather than an error or empty silence.
