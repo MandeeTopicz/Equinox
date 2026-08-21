@@ -127,7 +127,6 @@ func TestRunAutoSelectsHighestConfidenceMatch(t *testing.T) {
 		Store:      st,
 		Embedder:   fakeMatchEmbedder{vectors: map[string][]float64{"Common Title": {1, 0}}},
 		Extractor:  fakeMatchEntityExtractor{},
-		MinScore:   0.75,
 		DateWindow: 48 * time.Hour,
 		Side:       "yes",
 		Size:       10,
@@ -174,7 +173,6 @@ func TestRunWithExplicitEventSkipsAutoSelect(t *testing.T) {
 		Store:      st,
 		Embedder:   fakeMatchEmbedder{},
 		Extractor:  fakeMatchEntityExtractor{},
-		MinScore:   0.75,
 		DateWindow: 48 * time.Hour,
 		Event:      "kalshi:solo",
 		Side:       "yes",
@@ -220,7 +218,6 @@ func TestRunNoMatchesFoundStopsGracefully(t *testing.T) {
 		Store:      st,
 		Embedder:   fakeMatchEmbedder{vectors: map[string][]float64{"A": {1, 0}, "B": {0, 1}}},
 		Extractor:  fakeMatchEntityExtractor{},
-		MinScore:   0.75,
 		DateWindow: 48 * time.Hour,
 		Side:       "yes",
 		Size:       10,
@@ -238,6 +235,55 @@ func TestRunNoMatchesFoundStopsGracefully(t *testing.T) {
 	}
 }
 
+func TestRunAutoSelectSkipsNeedsReviewTier(t *testing.T) {
+	base := time.Date(2026, 3, 19, 0, 0, 0, 0, time.UTC)
+	// Vectors chosen for an exact 0.75 cosine similarity — comfortably in
+	// the review band (>=0.65) but below the matched title floor (0.80).
+	// Same date on both sides clears the date floor for either tier, so
+	// title alone decides the tier here.
+	kalshi := fakeVenueClient{name: "kalshi", markets: []venue.FetchedMarket{{
+		RawJSON: `{}`,
+		Canonical: normalize.Market{
+			ID: "kalshi:1", Venue: "kalshi", VenueMarketID: "1", Title: "Iffy A", ResolutionDate: base,
+			YesPrice: 0.5, NoPrice: 0.5, Liquidity: 100, FetchedAt: base,
+		},
+	}}}
+	polymarket := fakeVenueClient{name: "polymarket", markets: []venue.FetchedMarket{{
+		RawJSON: `{}`,
+		Canonical: normalize.Market{
+			ID: "polymarket:1", Venue: "polymarket", VenueMarketID: "1", Title: "Iffy B", ResolutionDate: base,
+			YesPrice: 0.5, NoPrice: 0.5, Liquidity: 100, FetchedAt: base,
+		},
+	}}}
+
+	st := &fakeRunStore{}
+	var out bytes.Buffer
+
+	err := Run(context.Background(), RunDeps{
+		Venues: []venue.VenueClient{kalshi, polymarket},
+		Store:  st,
+		Embedder: fakeMatchEmbedder{vectors: map[string][]float64{
+			"Iffy A": {1, 0},
+			"Iffy B": {0.75, 0.6614378277661477}, // unit vector, cosine 0.75 vs {1,0}
+		}},
+		Extractor:  fakeMatchEntityExtractor{},
+		DateWindow: 48 * time.Hour,
+		Side:       "yes",
+		Size:       10,
+		Out:        &out,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !strings.Contains(out.String(), "no high-confidence matches found; 1 group(s) need manual review") {
+		t.Errorf("expected the needs-review message, got %q", out.String())
+	}
+	if len(st.insertedRouting) != 0 {
+		t.Errorf("expected no routing decision for a needs-review-only result, got %d", len(st.insertedRouting))
+	}
+}
+
 func TestRunFetchFailurePropagatesAndSkipsMatchAndRoute(t *testing.T) {
 	st := &fakeRunStore{}
 	var out bytes.Buffer
@@ -246,7 +292,6 @@ func TestRunFetchFailurePropagatesAndSkipsMatchAndRoute(t *testing.T) {
 		Venues:     []venue.VenueClient{fakeVenueClient{name: "kalshi", err: errors.New("connection refused")}},
 		Store:      st,
 		Embedder:   fakeMatchEmbedder{},
-		MinScore:   0.75,
 		DateWindow: 48 * time.Hour,
 		Side:       "yes",
 		Size:       10,

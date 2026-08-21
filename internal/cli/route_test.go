@@ -44,6 +44,7 @@ func TestRouteMatchedGroup(t *testing.T) {
 		matchDecisions: map[string]store.MatchDecision{
 			"fed-march-2026-cut": {
 				ID: 1, EventID: "fed-march-2026-cut",
+				TitleSimilarity: 0.90, DateAlignment: 0.95, // clears the matched tier floors
 				Members: []store.MatchMember{
 					{Venue: "kalshi", CanonicalMarketID: "kalshi:1"},
 					{Venue: "polymarket", CanonicalMarketID: "polymarket:1"},
@@ -59,7 +60,7 @@ func TestRouteMatchedGroup(t *testing.T) {
 	}
 	var out bytes.Buffer
 
-	err := Route(context.Background(), RouteDeps{Store: st, Out: &out}, "fed-march-2026-cut", "yes", 100)
+	err := Route(context.Background(), RouteDeps{Store: st, Out: &out}, "fed-march-2026-cut", "yes", 100, false)
 	if err != nil {
 		t.Fatalf("Route: %v", err)
 	}
@@ -91,7 +92,7 @@ func TestRouteSingleMarketNoop(t *testing.T) {
 	}
 	var out bytes.Buffer
 
-	err := Route(context.Background(), RouteDeps{Store: st, Out: &out}, "kalshi:solo", "yes", 5)
+	err := Route(context.Background(), RouteDeps{Store: st, Out: &out}, "kalshi:solo", "yes", 5, false)
 	if err != nil {
 		t.Fatalf("Route: %v", err)
 	}
@@ -118,7 +119,7 @@ func TestRouteUnknownEventIsAnError(t *testing.T) {
 	st := &fakeRouteStore{}
 	var out bytes.Buffer
 
-	err := Route(context.Background(), RouteDeps{Store: st, Out: &out}, "totally-unknown", "yes", 100)
+	err := Route(context.Background(), RouteDeps{Store: st, Out: &out}, "totally-unknown", "yes", 100, false)
 	if err == nil {
 		t.Fatal("expected an error when neither a match group nor a market resolves, got nil")
 	}
@@ -144,10 +145,51 @@ func TestRouteValidatesInput(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var out bytes.Buffer
-			if err := Route(ctx, RouteDeps{Store: st, Out: &out}, tt.event, tt.side, tt.size); err == nil {
+			if err := Route(ctx, RouteDeps{Store: st, Out: &out}, tt.event, tt.side, tt.size, false); err == nil {
 				t.Error("expected a validation error, got nil")
 			}
 		})
+	}
+}
+
+func TestRouteRefusesNeedsReviewTierWithoutConfirmation(t *testing.T) {
+	now := time.Now()
+	st := &fakeRouteStore{
+		matchDecisions: map[string]store.MatchDecision{
+			"iffy-event": {
+				ID: 1, EventID: "iffy-event", Score: 0.71,
+				TitleSimilarity: 0.70, DateAlignment: 0.75, // clears review floors, not matched floors
+				Members: []store.MatchMember{
+					{Venue: "kalshi", CanonicalMarketID: "kalshi:1"},
+					{Venue: "polymarket", CanonicalMarketID: "polymarket:1"},
+				},
+			},
+		},
+		canonicalMarkets: map[string]store.CanonicalMarket{
+			"kalshi:1":     {ID: "kalshi:1", Venue: "kalshi", YesPrice: 0.5, NoPrice: 0.5, Liquidity: 100, ResolutionDate: now},
+			"polymarket:1": {ID: "polymarket:1", Venue: "polymarket", YesPrice: 0.55, NoPrice: 0.45, Liquidity: 100, ResolutionDate: now},
+		},
+	}
+	var out bytes.Buffer
+
+	err := Route(context.Background(), RouteDeps{Store: st, Out: &out}, "iffy-event", "yes", 10, false)
+	if err == nil {
+		t.Fatal("expected an error routing a needs-review-tier event without confirmation, got nil")
+	}
+	if !strings.Contains(err.Error(), "needs review") {
+		t.Errorf("expected the error to mention the tier, got %q", err.Error())
+	}
+	if len(st.inserted) != 0 {
+		t.Errorf("expected no routing decision inserted when refused, got %d", len(st.inserted))
+	}
+
+	// With explicit confirmation, the same event routes successfully.
+	err = Route(context.Background(), RouteDeps{Store: st, Out: &out}, "iffy-event", "yes", 10, true)
+	if err != nil {
+		t.Fatalf("Route with confirmReview=true: %v", err)
+	}
+	if len(st.inserted) != 1 {
+		t.Fatalf("expected 1 routing decision after confirmation, got %d", len(st.inserted))
 	}
 }
 
@@ -157,6 +199,7 @@ func TestRouteSkipsMissingMemberMarketsGracefully(t *testing.T) {
 		matchDecisions: map[string]store.MatchDecision{
 			"event-1": {
 				ID: 1, EventID: "event-1",
+				TitleSimilarity: 0.90, DateAlignment: 0.95, // clears the matched tier floors
 				Members: []store.MatchMember{
 					{Venue: "kalshi", CanonicalMarketID: "kalshi:1"},
 					{Venue: "polymarket", CanonicalMarketID: "polymarket:gone"}, // no longer in canonical_markets
@@ -169,7 +212,7 @@ func TestRouteSkipsMissingMemberMarketsGracefully(t *testing.T) {
 	}
 	var out bytes.Buffer
 
-	err := Route(context.Background(), RouteDeps{Store: st, Out: &out}, "event-1", "yes", 10)
+	err := Route(context.Background(), RouteDeps{Store: st, Out: &out}, "event-1", "yes", 10, false)
 	if err != nil {
 		t.Fatalf("Route: %v", err)
 	}

@@ -68,7 +68,7 @@ func TestMatchCommandInsertsGroupsAndPrintsSummary(t *testing.T) {
 	var out bytes.Buffer
 
 	err := Match(context.Background(), MatchDeps{
-		Store: st, Embedder: embedder, Extractor: fakeMatchEntityExtractor{}, MinScore: 0.75, DateWindow: match.DefaultDateWindow, Out: &out,
+		Store: st, Embedder: embedder, Extractor: fakeMatchEntityExtractor{}, DateWindow: match.DefaultDateWindow, Out: &out,
 	})
 	if err != nil {
 		t.Fatalf("Match: %v", err)
@@ -83,8 +83,8 @@ func TestMatchCommandInsertsGroupsAndPrintsSummary(t *testing.T) {
 	if d.EventID != "fed-rate-cut" {
 		t.Errorf("EventID = %q, want fed-rate-cut", d.EventID)
 	}
-	if d.MinScore != 0.75 {
-		t.Errorf("MinScore = %v, want 0.75", d.MinScore)
+	if d.MinScore != match.ReviewTitleFloor {
+		t.Errorf("MinScore = %v, want %v (vestigial, kept at the review title floor)", d.MinScore, match.ReviewTitleFloor)
 	}
 	if len(d.Members) != 2 {
 		t.Errorf("expected 2 members, got %d", len(d.Members))
@@ -93,7 +93,7 @@ func TestMatchCommandInsertsGroupsAndPrintsSummary(t *testing.T) {
 		t.Errorf("expected a non-empty signals breakdown, got %q", d.SignalsJSON)
 	}
 
-	wantSummary := "matched 1 cross-venue groups (min-score 0.75)\n"
+	wantSummary := "matched 1 cross-venue groups (1 matched, 0 needs review)\n"
 	if out.String() != wantSummary {
 		t.Errorf("summary = %q, want %q", out.String(), wantSummary)
 	}
@@ -103,7 +103,7 @@ func TestMatchCommandNoMarketsYet(t *testing.T) {
 	st := &fakeMatchStore{}
 	var out bytes.Buffer
 
-	err := Match(context.Background(), MatchDeps{Store: st, Embedder: fakeMatchEmbedder{}, Extractor: fakeMatchEntityExtractor{}, MinScore: 0.75, DateWindow: match.DefaultDateWindow, Out: &out})
+	err := Match(context.Background(), MatchDeps{Store: st, Embedder: fakeMatchEmbedder{}, Extractor: fakeMatchEntityExtractor{}, DateWindow: match.DefaultDateWindow, Out: &out})
 	if err != nil {
 		t.Fatalf("Match: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestMatchCommandDedupesSlugsWithinOneRun(t *testing.T) {
 	}}
 	var out bytes.Buffer
 
-	err := Match(context.Background(), MatchDeps{Store: st, Embedder: embedder, Extractor: fakeMatchEntityExtractor{}, MinScore: 0.75, DateWindow: match.DefaultDateWindow, Out: &out})
+	err := Match(context.Background(), MatchDeps{Store: st, Embedder: embedder, Extractor: fakeMatchEntityExtractor{}, DateWindow: match.DefaultDateWindow, Out: &out})
 	if err != nil {
 		t.Fatalf("Match: %v", err)
 	}

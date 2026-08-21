@@ -22,33 +22,36 @@ type RunStore interface {
 
 // RunDeps holds run's constructed dependencies.
 type RunDeps struct {
-	Venues     []venue.VenueClient
-	Store      RunStore
-	Embedder   match.Embedder
-	Extractor  match.EntityExtractor
-	MinScore   float64
-	DateWindow time.Duration
-	Event      string // optional; empty means auto-select the highest-confidence match
-	Side       string
-	Size       float64
-	Out        io.Writer
+	Venues        []venue.VenueClient
+	Store         RunStore
+	Embedder      match.Embedder
+	Extractor     match.EntityExtractor
+	DateWindow    time.Duration
+	Event         string // optional; empty means auto-select the highest-confidence match
+	Side          string
+	Size          float64
+	ConfirmReview bool // required to route an explicit Event that's only "needs review" tier; ignored during auto-select, which never picks a needs-review group
+	Out           io.Writer
 }
 
 // Run wraps fetch -> match -> route in one command (docs/ARCHITECTURE.md).
-// When Event is empty, it auto-selects the highest-confidence match group
-// and logs that it did so, e.g.:
+// When Event is empty, it auto-selects the highest-confidence *matched*-tier
+// group and logs that it did so, e.g.:
 //
 //	no --event given, defaulting to highest-confidence match: fed-march-2026-cut, score 0.91
 //
-// If match finds no groups at all, Run stops after fetch+match — there is
-// nothing to route.
+// A "needs review" group is never auto-selected — Run only picks among
+// groups confident enough to act on without a human looking first (see
+// docs/EQUIVALENCE.md's tier floors). If match finds no matched-tier
+// groups at all, Run stops after fetch+match rather than routing on
+// something it isn't confident about.
 func Run(ctx context.Context, deps RunDeps) error {
 	if err := Fetch(ctx, FetchDeps{Venues: deps.Venues, Store: deps.Store, Out: deps.Out}); err != nil {
 		return err
 	}
 
 	if err := Match(ctx, MatchDeps{
-		Store: deps.Store, Embedder: deps.Embedder, Extractor: deps.Extractor, MinScore: deps.MinScore, DateWindow: deps.DateWindow, Out: deps.Out,
+		Store: deps.Store, Embedder: deps.Embedder, Extractor: deps.Extractor, DateWindow: deps.DateWindow, Out: deps.Out,
 	}); err != nil {
 		return err
 	}
@@ -59,16 +62,34 @@ func Run(ctx context.Context, deps RunDeps) error {
 		if err != nil {
 			return fmt.Errorf("listing match decisions: %w", err)
 		}
-		if len(groups) == 0 {
-			fmt.Fprintln(deps.Out, "no cross-venue matches found; nothing to route")
+
+		// ListLatestMatchDecisions is ordered by score descending, so the
+		// first matched-tier group encountered is the highest-scored one.
+		var best *store.MatchDecision
+		reviewCount := 0
+		for i := range groups {
+			switch match.ClassifyTier(groups[i].TitleSimilarity, groups[i].DateAlignment) {
+			case match.TierMatched:
+				if best == nil {
+					best = &groups[i]
+				}
+			case match.TierNeedsReview:
+				reviewCount++
+			}
+		}
+
+		if best == nil {
+			if reviewCount > 0 {
+				fmt.Fprintf(deps.Out, "no high-confidence matches found; %d group(s) need manual review — run `equinox show matches` then `equinox route --event <id> --confirm-review`\n", reviewCount)
+			} else {
+				fmt.Fprintln(deps.Out, "no cross-venue matches found; nothing to route")
+			}
 			return nil
 		}
 
-		// ListLatestMatchDecisions is ordered by score descending.
-		best := groups[0]
 		eventID = best.EventID
 		fmt.Fprintf(deps.Out, "no --event given, defaulting to highest-confidence match: %s, score %.2f\n", eventID, best.Score)
 	}
 
-	return Route(ctx, RouteDeps{Store: deps.Store, Out: deps.Out}, eventID, deps.Side, deps.Size)
+	return Route(ctx, RouteDeps{Store: deps.Store, Out: deps.Out}, eventID, deps.Side, deps.Size, deps.ConfirmReview)
 }

@@ -97,7 +97,6 @@ func runFetch(cfg *Config) error {
 
 func runMatch(cfg *Config, args []string) error {
 	fs := flag.NewFlagSet("match", flag.ContinueOnError)
-	minScore := fs.Float64("min-score", cfg.Match.MinScore, "minimum composite score to consider two markets equivalent")
 	verbose := fs.Bool("verbose", false, "print a trace of every candidate pair considered, including gate rejections")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -122,7 +121,6 @@ func runMatch(cfg *Config, args []string) error {
 		Store:      st,
 		Embedder:   embedder,
 		Extractor:  extractor,
-		MinScore:   *minScore,
 		DateWindow: match.DefaultDateWindow,
 		Verbose:    *verbose,
 		Out:        os.Stdout,
@@ -134,6 +132,7 @@ func runRoute(cfg *Config, args []string) error {
 	event := fs.String("event", "", "match-group event id (see `equinox show matches`)")
 	side := fs.String("side", "", `"yes" or "no"`)
 	size := fs.Int("size", 0, "hypothetical contract count")
+	confirmReview := fs.Bool("confirm-review", false, `route a "needs review" tier event anyway (see docs/EQUIVALENCE.md)`)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -147,7 +146,7 @@ func runRoute(cfg *Config, args []string) error {
 	}
 	defer st.Close()
 
-	return cli.Route(context.Background(), cli.RouteDeps{Store: st, Out: os.Stdout}, *event, *side, float64(*size))
+	return cli.Route(context.Background(), cli.RouteDeps{Store: st, Out: os.Stdout}, *event, *side, float64(*size), *confirmReview)
 }
 
 func runRun(cfg *Config, args []string) error {
@@ -155,7 +154,7 @@ func runRun(cfg *Config, args []string) error {
 	event := fs.String("event", "", "match-group event id; if omitted, defaults to the highest-confidence match found")
 	side := fs.String("side", "yes", `"yes" or "no"`)
 	size := fs.Int("size", 100, "hypothetical contract count")
-	minScore := fs.Float64("min-score", cfg.Match.MinScore, "minimum composite score to consider two markets equivalent")
+	confirmReview := fs.Bool("confirm-review", false, `route an explicit --event that's only "needs review" tier anyway`)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -181,16 +180,16 @@ func runRun(cfg *Config, args []string) error {
 	}
 
 	return cli.Run(context.Background(), cli.RunDeps{
-		Venues:     clients,
-		Store:      st,
-		Embedder:   embedder,
-		Extractor:  extractor,
-		MinScore:   *minScore,
-		DateWindow: match.DefaultDateWindow,
-		Event:      *event,
-		Side:       *side,
-		Size:       float64(*size),
-		Out:        os.Stdout,
+		Venues:        clients,
+		Store:         st,
+		Embedder:      embedder,
+		Extractor:     extractor,
+		DateWindow:    match.DefaultDateWindow,
+		Event:         *event,
+		Side:          *side,
+		Size:          float64(*size),
+		ConfirmReview: *confirmReview,
+		Out:           os.Stdout,
 	})
 }
 
