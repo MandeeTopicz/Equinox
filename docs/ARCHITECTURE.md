@@ -39,12 +39,12 @@ Two command families:
 View commands never compute anything new — they only format rows that already exist. If a `show` command's output changes, something upstream (`fetch`/`match`/`route`) must have written new data.
 
 ```
-equinox fetch                                      # venue APIs -> raw_markets, canonical_markets
-equinox match [--min-score 0.75]                    # canonical_markets -> match_decisions
-equinox route --event <id> --side yes --size 100    # match_decisions -> routing_decisions
-equinox run                                         # fetch -> match -> route, one command
+equinox fetch                                       # venue APIs -> raw_markets, canonical_markets
+equinox match [--verbose]                            # canonical_markets -> match_decisions
+equinox route --event <id> --side yes --size 100 [--confirm-review]   # match_decisions -> routing_decisions
+equinox run [--confirm-review]                       # fetch -> match -> route, one command
 
-equinox show markets   [--venue X]                  # read canonical_markets
+equinox show markets   [--venue X]                   # read canonical_markets
 equinox show matches   [--event <id>]                # read match_decisions
 equinox show decisions [--event <id>]                # read routing_decisions
 ```
@@ -55,8 +55,8 @@ Command semantics and defaults:
   - Polymarket: one page (its observed cap), ordered by 24h volume — the API's default order surfaced an unrepresentative single-topic slice during development, and volume also selects for markets most likely to have a real cross-venue counterpart.
   - Kalshi: a bounded handful of pages (still not unbounded) plus a small, disclosed list of specific known-relevant series fetched explicitly — Kalshi's `/events` endpoint has no relevance/activity sort or filter of any kind, so blind pagination alone cannot reliably reach a specific real event without an impractically deep page count.
   - Manifold: one page, already reasonably diverse without further scoping.
-- `match --min-score` defaults to `0.75`; see [EQUIVALENCE.md](EQUIVALENCE.md) for how that number was chosen.
-- `route --event` has no default. Routing an unspecified market is treated as a real ambiguity, not something to silently guess. `run` invoked without `--event` completes fetch+match and either stops with a pointer to the discovered match groups, or — for one-command demoability — auto-selects the highest-confidence group and explicitly logs that it did so (e.g. `no --event given, defaulting to highest-confidence match: <id>, score 0.91`).
+- `match` no longer takes a `--min-score` flag — matching now classifies each candidate pair into a `matched`/`needs review`/`none` tier against fixed conjunctive floors rather than a single tunable blended threshold; see [EQUIVALENCE.md](EQUIVALENCE.md)'s "Conjunctive tier floors" and [DECISIONS.md](DECISIONS.md) for why. `--verbose` prints a trace of every candidate pair considered, including prefilter/gate rejections, to stdout only — it's not written to `match_decisions` (see [DECISIONS.md](DECISIONS.md)).
+- `route --event` has no default. Routing an unspecified market is treated as a real ambiguity, not something to silently guess. Routing a `needs review`-tier event requires `--confirm-review` (see [ROUTING.md](ROUTING.md)). `run` invoked without `--event` completes fetch+match and either stops with a pointer to the discovered match groups, or — for one-command demoability — auto-selects the highest-confidence `matched`-tier group and explicitly logs that it did so (e.g. `no --event given, defaulting to highest-confidence match: <id>, score 0.91`); it never auto-selects a `needs review`-tier group.
 - Any `show` command run before its upstream pipeline step has produced data returns an explicit "no data yet — run `equinox fetch`" style message rather than an error or empty silence.
 
 ## Output
