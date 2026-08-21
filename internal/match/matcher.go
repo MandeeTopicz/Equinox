@@ -21,25 +21,30 @@ type PairScore struct {
 // represent the same real-world event. The aggregate fields are the
 // minimum across the group's qualifying pairwise edges — a group is only
 // as confident as its weakest link, consistent with EQUIVALENCE.md's
-// precision-over-recall design principle.
+// precision-over-recall design principle. Tier is derived from the
+// (already minimum-aggregated) TitleSimilarity/DateAlignment via
+// ClassifyTier — a group is exactly as conservative as applying the tier
+// floors to its weakest signals would suggest.
 type Group struct {
 	Members         []normalize.Market
 	Score           float64
 	TitleSimilarity float64
 	DateAlignment   float64
 	CategoryMatch   float64
+	Tier            Tier
 	Pairs           []PairScore
 }
 
 // Trace records what happened to one prefilter survivor: gate-rejected
-// (Reason set, Score zero — scoring never ran), scored but below minScore
-// (Reason empty, Passed false), or matched (Passed true). Populated for
-// every candidate pair regardless of whether verbose output is requested;
-// the CLI's --verbose flag decides whether to print it. See
-// docs/EQUIVALENCE.md's "deterministic gates" section.
+// (Reason set, Tier/Score zero — scoring never ran), scored but TierNone
+// (didn't clear even the review floors), or qualified at some tier.
+// Populated for every candidate pair regardless of whether verbose output
+// is requested; the CLI's --verbose flag decides whether to print it. See
+// docs/EQUIVALENCE.md's "deterministic gates" and "conjunctive tier
+// floors" sections.
 type Trace struct {
 	A, B   normalize.Market
-	Passed bool
+	Tier   Tier
 	Reason string
 	Score  float64
 }
@@ -48,12 +53,15 @@ type Trace struct {
 // (docs/EQUIVALENCE.md): a cross-venue heuristic prefilter, deterministic
 // gates (numeric threshold, named entities) that can reject a pair outright
 // before any scoring, then composite scoring — via embedder for the
-// title-similarity signal — for pairs that survive both. Pairs scoring at
-// or above minScore are grouped into connected components (so a 3-way
-// match forms one group, not three separate pairs — see docs/DECISIONS.md
-// on why a third venue was added). Groups are returned sorted by score
-// descending, alongside a trace of every candidate pair considered.
-func Match(ctx context.Context, markets []normalize.Market, embedder Embedder, extractor EntityExtractor, minScore float64, dateWindow time.Duration) ([]Group, []Trace, error) {
+// title-similarity signal — for pairs that survive both. A pair qualifies
+// only if its title similarity and date alignment independently clear a
+// tier's floors (ClassifyTier) — neither can compensate for the other.
+// Qualifying pairs (TierMatched or TierNeedsReview) are grouped into
+// connected components (so a 3-way match forms one group, not three
+// separate pairs — see docs/DECISIONS.md on why a third venue was added).
+// Groups are returned sorted by score descending, alongside a trace of
+// every candidate pair considered.
+func Match(ctx context.Context, markets []normalize.Market, embedder Embedder, extractor EntityExtractor, dateWindow time.Duration) ([]Group, []Trace, error) {
 	candidates := candidatePairs(markets, dateWindow)
 	if len(candidates) == 0 {
 		return nil, nil, nil
@@ -88,9 +96,9 @@ func Match(ctx context.Context, markets []normalize.Market, embedder Embedder, e
 
 		titleSim := cosineSimilarity(embeddings[textIndex[c.a.ID]], embeddings[textIndex[c.b.ID]])
 		score := Composite(c.a, c.b, titleSim, dateWindow)
-		passed := score.Composite >= minScore
-		traces = append(traces, Trace{A: c.a, B: c.b, Passed: passed, Score: score.Composite})
-		if !passed {
+		tier := ClassifyTier(score.TitleSimilarity, score.DateAlignment)
+		traces = append(traces, Trace{A: c.a, B: c.b, Tier: tier, Score: score.Composite})
+		if tier == TierNone {
 			continue
 		}
 		uf.union(c.a.ID, c.b.ID)
@@ -237,6 +245,7 @@ func buildGroups(uf *unionFind, qualifying map[edge]PairScore) []Group {
 			TitleSimilarity: minTitle,
 			DateAlignment:   minDate,
 			CategoryMatch:   minCategory,
+			Tier:            ClassifyTier(minTitle, minDate),
 			Pairs:           pairs,
 		})
 	}

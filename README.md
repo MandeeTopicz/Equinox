@@ -32,7 +32,6 @@ venues:
     base_url: https://api.manifold.markets
 
 match:
-  min_score: 0.75
   embedding:
     provider: openai
     model: text-embedding-3-small
@@ -60,8 +59,8 @@ Pipeline commands (write to the database):
 
 ```
 ./equinox fetch                                     # ingest markets from all configured venues
-./equinox match                                      # detect cross-venue equivalence, default --min-score 0.75
-./equinox route --event <id> --side yes --size 100   # simulate a hypothetical order
+./equinox match [--verbose]                          # detect cross-venue equivalence (see EQUIVALENCE.md for the tier floors)
+./equinox route --event <id> --side yes --size 100   # simulate a hypothetical order (add --confirm-review for a "needs review" tier match)
 ./equinox run                                        # fetch -> match -> route in one step
 ```
 
@@ -80,11 +79,11 @@ $ ./equinox fetch
 fetched 340 markets from polymarket, 128 from kalshi, 512 from manifold
 
 $ ./equinox match
-matched 41 cross-venue groups (min-score 0.75)
+matched 41 cross-venue groups (38 matched, 3 needs review)
 
 $ ./equinox show matches
-event                    venues                        score
-fed-march-2026-cut       polymarket, kalshi, manifold   0.91
+event                    venues                        score   tier
+fed-march-2026-cut       polymarket, kalshi, manifold   0.91    matched
 ...
 
 $ ./equinox route --event fed-march-2026-cut --side yes --size 100

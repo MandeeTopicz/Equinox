@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"equinox/internal/match"
 	"equinox/internal/route"
 	"equinox/internal/store"
 )
@@ -47,8 +48,8 @@ func toMarketView(m store.CanonicalMarket) marketView {
 type matchView struct {
 	EventID         string              `json:"event_id"`
 	CreatedAt       time.Time           `json:"created_at"`
-	MinScore        float64             `json:"min_score"`
 	Score           float64             `json:"score"`
+	Tier            string              `json:"tier"`
 	TitleSimilarity float64             `json:"title_similarity"`
 	DateAlignment   float64             `json:"date_alignment"`
 	CategoryMatch   float64             `json:"category_match"`
@@ -60,8 +61,8 @@ func toMatchView(d store.MatchDecision) matchView {
 	return matchView{
 		EventID:         d.EventID,
 		CreatedAt:       d.CreatedAt,
-		MinScore:        d.MinScore,
 		Score:           d.Score,
+		Tier:            match.ClassifyTier(d.TitleSimilarity, d.DateAlignment).String(),
 		TitleSimilarity: d.TitleSimilarity,
 		DateAlignment:   d.DateAlignment,
 		CategoryMatch:   d.CategoryMatch,

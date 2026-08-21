@@ -21,7 +21,23 @@ For every venue in the matched group, the router reads only canonical fields tha
 
 The router never branches on venue identity or name. It selects the venue with the best effective price for the requested side among venues whose liquidity proxy plausibly supports the requested size; ties are broken on higher liquidity. This is a deliberately simple, deterministic rule — the objective is demonstrating the reasoning and structure of a routing decision, not optimizing execution quality (see Out of scope, below).
 
-If `--event` refers to a market with no match group (nothing cleared the equivalence threshold against it), routing has nothing to compare against; this is logged as a single-venue no-op decision rather than treated as an error. Concretely: `route --event <id>` first looks up `<id>` as a match-group event id; if none exists, it falls back to treating `<id>` as a raw canonical market id (`venue:venue_market_id`, discoverable via `equinox show markets`) and, if that resolves, logs a no-op decision for that single venue — nothing selected, since there's nothing to compare against, just a record that routing was attempted. If neither resolves, `<id>` doesn't refer to anything real and that *is* an error.
+If `--event` refers to a market with no match group (nothing cleared even the `needs review` tier against it), routing has nothing to compare against; this is logged as a single-venue no-op decision rather than treated as an error. Concretely: `route --event <id>` first looks up `<id>` as a match-group event id; if none exists, it falls back to treating `<id>` as a raw canonical market id (`venue:venue_market_id`, discoverable via `equinox show markets`) and, if that resolves, logs a no-op decision for that single venue — nothing selected, since there's nothing to compare against, just a record that routing was attempted. If neither resolves, `<id>` doesn't refer to anything real and that *is* an error.
+
+## Tier gate: routing a "needs review" match
+
+A match group's event id does resolve to something real, but that doesn't by itself mean routing should proceed unattended. Every match group carries a tier — `matched` or `needs review` (see [EQUIVALENCE.md](EQUIVALENCE.md)'s "Conjunctive tier floors") — derived from the same `title_similarity`/`date_alignment` values already stored on its `match_decisions` row, not a separate field.
+
+- **`matched`** — `equinox route --event <id> ...` proceeds normally.
+- **`needs review`** — `equinox route --event <id> ...` refuses by default:
+
+  ```
+  $ ./equinox route --event some-plausible-but-unconfirmed-pair --side yes --size 100
+  error: event "some-plausible-but-unconfirmed-pair" is "needs review" (score 0.71), not "matched" — not confident enough to route automatically; re-run with --confirm-review to route anyway, acknowledging this hasn't cleared the matched threshold
+  ```
+
+  `--confirm-review` overrides this and routes anyway. The flag is a deliberate acknowledgment, not a silent bypass — it exists so that routing a lower-confidence match is a visible, opt-in decision by whoever ran the command, not something that happens by default because a pair happened to clear the lower of the two tiers. `equinox run`'s auto-select (no `--event` given) never picks a `needs review` group on its own; if the only groups found are `needs review`, `run` says so and points at `equinox show matches` / `equinox route --event <id> --confirm-review` rather than guessing.
+
+This gate lives in the routing layer, not the matching layer, on purpose: equivalence detection's job is to classify confidence honestly (including the middle tier), and routing's job is to decide what to do with that classification — conflating the two would mean either silently downgrading `needs review` groups out of existence, or silently routing them as if they were `matched`. Keeping the refusal here, next to the rest of routing's own rules, keeps that decision visible and in one place.
 
 ## Rationale format
 
