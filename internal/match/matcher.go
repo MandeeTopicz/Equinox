@@ -31,46 +31,104 @@ type Group struct {
 	Pairs           []PairScore
 }
 
-// Match runs the full two-stage equivalence detection over markets
-// (docs/EQUIVALENCE.md): a cross-venue heuristic prefilter, then composite
-// scoring — via embedder for the title-similarity signal — for pairs that
-// survive it. Pairs scoring at or above minScore are grouped into
-// connected components (so a 3-way match forms one group, not three
-// separate pairs — see docs/DECISIONS.md on why a third venue was added).
-// Groups are returned sorted by score descending.
-func Match(ctx context.Context, markets []normalize.Market, embedder Embedder, minScore float64, dateWindow time.Duration) ([]Group, error) {
+// Trace records what happened to one prefilter survivor: gate-rejected
+// (Reason set, Score zero — scoring never ran), scored but below minScore
+// (Reason empty, Passed false), or matched (Passed true). Populated for
+// every candidate pair regardless of whether verbose output is requested;
+// the CLI's --verbose flag decides whether to print it. See
+// docs/EQUIVALENCE.md's "deterministic gates" section.
+type Trace struct {
+	A, B   normalize.Market
+	Passed bool
+	Reason string
+	Score  float64
+}
+
+// Match runs the full equivalence detection pipeline over markets
+// (docs/EQUIVALENCE.md): a cross-venue heuristic prefilter, deterministic
+// gates (numeric threshold, named entities) that can reject a pair outright
+// before any scoring, then composite scoring — via embedder for the
+// title-similarity signal — for pairs that survive both. Pairs scoring at
+// or above minScore are grouped into connected components (so a 3-way
+// match forms one group, not three separate pairs — see docs/DECISIONS.md
+// on why a third venue was added). Groups are returned sorted by score
+// descending, alongside a trace of every candidate pair considered.
+func Match(ctx context.Context, markets []normalize.Market, embedder Embedder, extractor EntityExtractor, minScore float64, dateWindow time.Duration) ([]Group, []Trace, error) {
 	candidates := candidatePairs(markets, dateWindow)
 	if len(candidates) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	texts, textIndex := uniqueEmbeddingTexts(candidates)
 	embeddings, err := embedder.Embed(ctx, texts)
 	if err != nil {
-		return nil, fmt.Errorf("embedding candidate markets: %w", err)
+		return nil, nil, fmt.Errorf("embedding candidate markets: %w", err)
 	}
 	if len(embeddings) != len(texts) {
-		return nil, fmt.Errorf("embedder returned %d vectors for %d inputs", len(embeddings), len(texts))
+		return nil, nil, fmt.Errorf("embedder returned %d vectors for %d inputs", len(embeddings), len(texts))
+	}
+
+	entitiesByTitle, err := extractAllEntities(ctx, candidates, extractor)
+	if err != nil {
+		return nil, nil, fmt.Errorf("extracting entities from candidate markets: %w", err)
 	}
 
 	uf := newUnionFind()
 	qualifying := map[edge]PairScore{}
+	traces := make([]Trace, 0, len(candidates))
 	for _, c := range candidates {
+		if gate := ThresholdGate(c.a, c.b); !gate.Passed {
+			traces = append(traces, Trace{A: c.a, B: c.b, Reason: gate.Reason})
+			continue
+		}
+		if gate := entityGateFromSets(entitiesByTitle[c.a.Title], entitiesByTitle[c.b.Title]); !gate.Passed {
+			traces = append(traces, Trace{A: c.a, B: c.b, Reason: gate.Reason})
+			continue
+		}
+
 		titleSim := cosineSimilarity(embeddings[textIndex[c.a.ID]], embeddings[textIndex[c.b.ID]])
 		score := Composite(c.a, c.b, titleSim, dateWindow)
-		if score.Composite < minScore {
+		passed := score.Composite >= minScore
+		traces = append(traces, Trace{A: c.a, B: c.b, Passed: passed, Score: score.Composite})
+		if !passed {
 			continue
 		}
 		uf.union(c.a.ID, c.b.ID)
 		qualifying[edgeKey(c.a.ID, c.b.ID)] = PairScore{A: c.a, B: c.b, Score: score}
 	}
 	if len(qualifying) == 0 {
-		return nil, nil
+		return nil, traces, nil
 	}
 
 	groups := buildGroups(uf, qualifying)
 	sort.Slice(groups, func(i, j int) bool { return groups[i].Score > groups[j].Score })
-	return groups, nil
+	return groups, traces, nil
+}
+
+// extractAllEntities extracts entities for each unique candidate market
+// title exactly once, however many pairs it appears in.
+func extractAllEntities(ctx context.Context, candidates []candidatePair, extractor EntityExtractor) (map[string][]string, error) {
+	result := map[string][]string{}
+	extract := func(title string) error {
+		if _, ok := result[title]; ok {
+			return nil
+		}
+		entities, err := extractor.ExtractEntities(ctx, title)
+		if err != nil {
+			return fmt.Errorf("title %q: %w", title, err)
+		}
+		result[title] = entities
+		return nil
+	}
+	for _, c := range candidates {
+		if err := extract(c.a.Title); err != nil {
+			return nil, err
+		}
+		if err := extract(c.b.Title); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
 }
 
 type candidatePair struct{ a, b normalize.Market }

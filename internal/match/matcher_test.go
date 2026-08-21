@@ -56,7 +56,7 @@ func TestMatchGroupsThreeVenuesTransitively(t *testing.T) {
 		"Market E": {1, 0}, // identical to D -> sim 1.0
 	}}
 
-	groups, err := Match(context.Background(), []normalize.Market{p, k, m, d, e}, embedder, 0.75, DefaultDateWindow)
+	groups, _, err := Match(context.Background(), []normalize.Market{p, k, m, d, e}, embedder, fakeEntityExtractor{}, 0.75, DefaultDateWindow)
 	if err != nil {
 		t.Fatalf("Match: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestMatchNoCandidatesReturnsNilNotError(t *testing.T) {
 		{ID: "polymarket:2", Venue: "polymarket", Title: "B", ResolutionDate: base},
 	}
 
-	groups, err := Match(context.Background(), markets, fakeEmbedder{}, 0.75, DefaultDateWindow)
+	groups, _, err := Match(context.Background(), markets, fakeEmbedder{}, fakeEntityExtractor{}, 0.75, DefaultDateWindow)
 	if err != nil {
 		t.Fatalf("Match: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestMatchThresholdExcludesWeakPairs(t *testing.T) {
 	// reasonable threshold even with perfect date alignment.
 	embedder := fakeEmbedder{vectors: map[string][]float64{"A": {1, 0}, "B": {0, 1}}}
 
-	groups, err := Match(context.Background(), []normalize.Market{a, b}, embedder, 0.75, DefaultDateWindow)
+	groups, _, err := Match(context.Background(), []normalize.Market{a, b}, embedder, fakeEntityExtractor{}, 0.75, DefaultDateWindow)
 	if err != nil {
 		t.Fatalf("Match: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestMatchPropagatesEmbedderError(t *testing.T) {
 
 	embedder := fakeEmbedder{err: errors.New("api unavailable")}
 
-	if _, err := Match(context.Background(), []normalize.Market{a, b}, embedder, 0.75, DefaultDateWindow); err == nil {
+	if _, _, err := Match(context.Background(), []normalize.Market{a, b}, embedder, fakeEntityExtractor{}, 0.75, DefaultDateWindow); err == nil {
 		t.Fatal("expected an error when the embedder fails, got nil")
 	}
 }
