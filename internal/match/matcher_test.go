@@ -56,7 +56,7 @@ func TestMatchGroupsThreeVenuesTransitively(t *testing.T) {
 		"Market E": {1, 0}, // identical to D -> sim 1.0
 	}}
 
-	groups, _, err := Match(context.Background(), []normalize.Market{p, k, m, d, e}, embedder, fakeEntityExtractor{}, 0.75, DefaultDateWindow)
+	groups, _, err := Match(context.Background(), []normalize.Market{p, k, m, d, e}, embedder, fakeEntityExtractor{}, DefaultDateWindow)
 	if err != nil {
 		t.Fatalf("Match: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestMatchNoCandidatesReturnsNilNotError(t *testing.T) {
 		{ID: "polymarket:2", Venue: "polymarket", Title: "B", ResolutionDate: base},
 	}
 
-	groups, _, err := Match(context.Background(), markets, fakeEmbedder{}, fakeEntityExtractor{}, 0.75, DefaultDateWindow)
+	groups, _, err := Match(context.Background(), markets, fakeEmbedder{}, fakeEntityExtractor{}, DefaultDateWindow)
 	if err != nil {
 		t.Fatalf("Match: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestMatchThresholdExcludesWeakPairs(t *testing.T) {
 	// reasonable threshold even with perfect date alignment.
 	embedder := fakeEmbedder{vectors: map[string][]float64{"A": {1, 0}, "B": {0, 1}}}
 
-	groups, _, err := Match(context.Background(), []normalize.Market{a, b}, embedder, fakeEntityExtractor{}, 0.75, DefaultDateWindow)
+	groups, _, err := Match(context.Background(), []normalize.Market{a, b}, embedder, fakeEntityExtractor{}, DefaultDateWindow)
 	if err != nil {
 		t.Fatalf("Match: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestMatchPropagatesEmbedderError(t *testing.T) {
 
 	embedder := fakeEmbedder{err: errors.New("api unavailable")}
 
-	if _, _, err := Match(context.Background(), []normalize.Market{a, b}, embedder, fakeEntityExtractor{}, 0.75, DefaultDateWindow); err == nil {
+	if _, _, err := Match(context.Background(), []normalize.Market{a, b}, embedder, fakeEntityExtractor{}, DefaultDateWindow); err == nil {
 		t.Fatal("expected an error when the embedder fails, got nil")
 	}
 }
@@ -171,6 +171,33 @@ func TestBuildGroupsAggregatesUseMinimumAcrossQualifyingEdges(t *testing.T) {
 	}
 	if len(g.Pairs) != 2 {
 		t.Errorf("expected 2 qualifying pairs in the group, got %d", len(g.Pairs))
+	}
+	// title=0.85 clears the matched title floor (0.80) but date=0.70 only
+	// clears the review date floor (0.70), not the matched one (0.90) —
+	// the group's tier should reflect the weaker of the two, not the
+	// stronger, per ClassifyTier's conjunctive rule.
+	if g.Tier != TierNeedsReview {
+		t.Errorf("Tier = %v, want %v", g.Tier, TierNeedsReview)
+	}
+}
+
+func TestBuildGroupsTierMatchedWhenBothAggregatesClearMatchedFloors(t *testing.T) {
+	p := normalize.Market{ID: "p", Venue: "polymarket", VenueMarketID: "1"}
+	k := normalize.Market{ID: "k", Venue: "kalshi", VenueMarketID: "1"}
+
+	uf := newUnionFind()
+	uf.union(p.ID, k.ID)
+
+	qualifying := map[edge]PairScore{
+		edgeKey(p.ID, k.ID): {A: p, B: k, Score: Score{Composite: 0.95, TitleSimilarity: 0.90, DateAlignment: 0.95, CategoryMatch: 1}},
+	}
+
+	groups := buildGroups(uf, qualifying)
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(groups))
+	}
+	if groups[0].Tier != TierMatched {
+		t.Errorf("Tier = %v, want %v", groups[0].Tier, TierMatched)
 	}
 }
 
