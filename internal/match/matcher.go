@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"sync"
 	"time"
 
 	"equinox/internal/normalize"
@@ -50,18 +51,34 @@ type Trace struct {
 }
 
 // Match runs the full equivalence detection pipeline over markets
-// (docs/EQUIVALENCE.md): a cross-venue heuristic prefilter, deterministic
-// gates (numeric threshold, named entities) that can reject a pair outright
-// before any scoring, then composite scoring — via embedder for the
-// title-similarity signal — for pairs that survive both. A pair qualifies
-// only if its title similarity and date alignment independently clear a
-// tier's floors (ClassifyTier) — neither can compensate for the other.
+// (docs/EQUIVALENCE.md): a cross-venue heuristic prefilter, a deterministic
+// numeric-threshold gate that can reject a pair outright before any
+// scoring, then composite scoring — via embedder for the title-similarity
+// signal. A pair qualifies only if its title similarity and date alignment
+// independently clear a tier's floors (ClassifyTier) — neither can
+// compensate for the other. Only pairs that clear at least the
+// needs-review floors on title+date go on to the named-entity gate (an
+// LLM call, unlike everything before it) — an entity mismatch can only
+// downgrade an already-qualifying pair to a hard reject, never promote one
+// that title+date alone couldn't reach, so spending an extraction call on
+// a pair that's already TierNone can't change its outcome. This is what
+// keeps entity-extraction volume scaling with real candidate overlap
+// instead of total prefilter-survivor volume — see docs/DECISIONS.md: at
+// real fetch-coverage volume, eagerly extracting for every prefilter
+// survivor (thousands of markets) rather than lazily for only the pairs
+// that could still be affected (a small fraction) is what exhausted a
+// real OpenAI account's daily request quota in a single run.
 // Qualifying pairs (TierMatched or TierNeedsReview) are grouped into
 // connected components (so a 3-way match forms one group, not three
 // separate pairs — see docs/DECISIONS.md on why a third venue was added).
 // Groups are returned sorted by score descending, alongside a trace of
 // every candidate pair considered.
-func Match(ctx context.Context, markets []normalize.Market, embedder Embedder, extractor EntityExtractor, dateWindow time.Duration) ([]Group, []Trace, error) {
+//
+// onProgress, if non-nil, is called during entity extraction (the
+// pipeline's dominant per-call cost, though no longer its dominant call
+// volume — see docs/DECISIONS.md) with (completed, total) candidate
+// markets needing extraction. Pass nil to skip progress reporting.
+func Match(ctx context.Context, markets []normalize.Market, embedder Embedder, extractor EntityExtractor, dateWindow time.Duration, onProgress func(done, total int)) ([]Group, []Trace, error) {
 	candidates := candidatePairs(markets, dateWindow)
 	if len(candidates) == 0 {
 		return nil, nil, nil
@@ -76,33 +93,57 @@ func Match(ctx context.Context, markets []normalize.Market, embedder Embedder, e
 		return nil, nil, fmt.Errorf("embedder returned %d vectors for %d inputs", len(embeddings), len(texts))
 	}
 
-	entitiesByTitle, err := extractAllEntities(ctx, candidates, extractor)
+	// Pass 1: every cheap, non-AI signal (threshold gate, title
+	// similarity, date alignment) for every candidate. Filters candidates
+	// down to provisional — those that clear at least the needs-review
+	// floors on title+date and so are the only ones an entity mismatch
+	// could actually still reject.
+	type provisional struct {
+		c     candidatePair
+		score Score
+		tier  Tier
+	}
+	traces := make([]Trace, 0, len(candidates))
+	var needsEntityCheck []provisional
+	for _, c := range candidates {
+		if gate := ThresholdGate(c.a, c.b); !gate.Passed {
+			traces = append(traces, Trace{A: c.a, B: c.b, Reason: gate.Reason})
+			continue
+		}
+		titleSim := cosineSimilarity(embeddings[textIndex[c.a.ID]], embeddings[textIndex[c.b.ID]])
+		score := Composite(c.a, c.b, titleSim, dateWindow)
+		tier := ClassifyTier(score.TitleSimilarity, score.DateAlignment)
+		if tier == TierNone {
+			traces = append(traces, Trace{A: c.a, B: c.b, Tier: tier, Score: score.Composite})
+			continue
+		}
+		needsEntityCheck = append(needsEntityCheck, provisional{c: c, score: score, tier: tier})
+	}
+	if len(needsEntityCheck) == 0 {
+		return nil, traces, nil
+	}
+
+	// Pass 2: the named-entity gate, only for the provisional subset.
+	entityCandidates := make([]candidatePair, len(needsEntityCheck))
+	for i, p := range needsEntityCheck {
+		entityCandidates[i] = p.c
+	}
+	entitiesByTitle, err := extractAllEntities(ctx, entityCandidates, extractor, onProgress)
 	if err != nil {
 		return nil, nil, fmt.Errorf("extracting entities from candidate markets: %w", err)
 	}
 
 	uf := newUnionFind()
 	qualifying := map[edge]PairScore{}
-	traces := make([]Trace, 0, len(candidates))
-	for _, c := range candidates {
-		if gate := ThresholdGate(c.a, c.b); !gate.Passed {
-			traces = append(traces, Trace{A: c.a, B: c.b, Reason: gate.Reason})
-			continue
-		}
+	for _, p := range needsEntityCheck {
+		c := p.c
 		if gate := entityGateFromSets(entitiesByTitle[c.a.Title], entitiesByTitle[c.b.Title]); !gate.Passed {
 			traces = append(traces, Trace{A: c.a, B: c.b, Reason: gate.Reason})
 			continue
 		}
-
-		titleSim := cosineSimilarity(embeddings[textIndex[c.a.ID]], embeddings[textIndex[c.b.ID]])
-		score := Composite(c.a, c.b, titleSim, dateWindow)
-		tier := ClassifyTier(score.TitleSimilarity, score.DateAlignment)
-		traces = append(traces, Trace{A: c.a, B: c.b, Tier: tier, Score: score.Composite})
-		if tier == TierNone {
-			continue
-		}
+		traces = append(traces, Trace{A: c.a, B: c.b, Tier: p.tier, Score: p.score.Composite})
 		uf.union(c.a.ID, c.b.ID)
-		qualifying[edgeKey(c.a.ID, c.b.ID)] = PairScore{A: c.a, B: c.b, Score: score}
+		qualifying[edgeKey(c.a.ID, c.b.ID)] = PairScore{A: c.a, B: c.b, Score: p.score}
 	}
 	if len(qualifying) == 0 {
 		return nil, traces, nil
@@ -113,30 +154,120 @@ func Match(ctx context.Context, markets []normalize.Market, embedder Embedder, e
 	return groups, traces, nil
 }
 
+// entityExtractionConcurrency bounds how many ExtractEntities calls run at
+// once. Each call is a real OpenAI HTTP round trip; running them fully
+// sequentially made match's wall-clock time scale linearly with the
+// candidate set — verified live to take 20+ minutes and still climbing
+// against real fetch-coverage volume (thousands of prefilter survivors,
+// see docs/DECISIONS.md). 8 is a reasoned, not empirically tuned, bound:
+// enough concurrency to cut wall-clock time substantially, conservative
+// enough to stay well clear of OpenAI's per-account rate limits under
+// normal use.
+const entityExtractionConcurrency = 8
+
 // extractAllEntities extracts entities for each unique candidate market
-// title exactly once, however many pairs it appears in.
-func extractAllEntities(ctx context.Context, candidates []candidatePair, extractor EntityExtractor) (map[string][]string, error) {
-	result := map[string][]string{}
-	extract := func(title string) error {
-		if _, ok := result[title]; ok {
-			return nil
-		}
-		entities, err := extractor.ExtractEntities(ctx, title)
-		if err != nil {
-			return fmt.Errorf("title %q: %w", title, err)
-		}
-		result[title] = entities
-		return nil
+// title exactly once, however many pairs it appears in, using a bounded
+// pool of entityExtractionConcurrency workers. onProgress, if non-nil, is
+// called after each completed extraction with (completed, total) — total
+// is the number of unique titles, not the candidate pair count. The first
+// extraction error cancels remaining in-flight and queued work rather than
+// letting them run to completion needlessly.
+func extractAllEntities(ctx context.Context, candidates []candidatePair, extractor EntityExtractor, onProgress func(done, total int)) (map[string][]string, error) {
+	titles := uniqueTitles(candidates)
+	total := len(titles)
+	if total == 0 {
+		return map[string][]string{}, nil
 	}
-	for _, c := range candidates {
-		if err := extract(c.a.Title); err != nil {
-			return nil, err
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	type outcome struct {
+		title    string
+		entities []string
+		err      error
+	}
+
+	jobs := make(chan string)
+	results := make(chan outcome)
+
+	workers := entityExtractionConcurrency
+	if workers > total {
+		workers = total
+	}
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			for title := range jobs {
+				entities, err := extractor.ExtractEntities(ctx, title)
+				select {
+				case results <- outcome{title, entities, err}:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
+
+	go func() {
+		defer close(jobs)
+		for _, title := range titles {
+			select {
+			case jobs <- title:
+			case <-ctx.Done():
+				return
+			}
 		}
-		if err := extract(c.b.Title); err != nil {
-			return nil, err
+	}()
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	result := make(map[string][]string, total)
+	done := 0
+	var firstErr error
+	for o := range results {
+		done++
+		if onProgress != nil {
+			onProgress(done, total)
 		}
+		if o.err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("title %q: %w", o.title, o.err)
+				cancel()
+			}
+			continue
+		}
+		result[o.title] = o.entities
+	}
+	if firstErr != nil {
+		return nil, firstErr
 	}
 	return result, nil
+}
+
+// uniqueTitles collects each candidate pair's two market titles exactly
+// once, in first-seen order — deterministic input ordering even though
+// extraction itself runs concurrently and completes unordered.
+func uniqueTitles(candidates []candidatePair) []string {
+	seen := map[string]bool{}
+	titles := make([]string, 0, len(candidates)*2)
+	add := func(title string) {
+		if seen[title] {
+			return
+		}
+		seen[title] = true
+		titles = append(titles, title)
+	}
+	for _, c := range candidates {
+		add(c.a.Title)
+		add(c.b.Title)
+	}
+	return titles
 }
 
 type candidatePair struct{ a, b normalize.Market }

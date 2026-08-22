@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"equinox/internal/normalize"
 )
@@ -86,7 +88,42 @@ type OpenAIEntityExtractor struct {
 	model      string
 	baseURL    string
 	httpClient *http.Client
+
+	// maxRetries and retryBaseDelay govern retry-with-backoff on HTTP 429
+	// (rate limited) responses only — every other non-2xx status fails
+	// immediately, since 429 is the one response OpenAI sends specifically
+	// to say "slow down", not "something is wrong". A defensive backstop
+	// for occasional overshoot, not the primary rate-limiting mechanism —
+	// see limiter below for why per-call reactive backoff alone isn't
+	// enough. Discovered live: once extraction ran concurrently (see
+	// entityExtractionConcurrency in matcher.go), a real match run against
+	// real fetch-coverage volume hit the account's actual gpt-4o-mini rate
+	// ceiling (500 requests/min) and, before this existed, failed the
+	// entire run — losing all extraction work already done — rather than
+	// backing off. See docs/DECISIONS.md.
+	maxRetries     int
+	retryBaseDelay time.Duration
+
+	// limiter paces requests to stay under the account's rate ceiling
+	// proactively, rather than relying solely on retryBaseDelay to react
+	// after the fact. Verified live that retry-with-backoff alone isn't
+	// enough: with entityExtractionConcurrency workers all issuing
+	// requests as fast as they can, once the account-wide ceiling is hit
+	// it stays hit — every worker keeps tripping 429 simultaneously for
+	// as long as aggregate demand exceeds the sustainable rate, which for
+	// a large match run is minutes, not the few seconds maxRetries's
+	// backoff schedule is sized for. A shared limiter caps how often any
+	// worker starts a new request in the first place. See
+	// docs/DECISIONS.md.
+	limiter *rateLimiter
 }
+
+// entityExtractionRateLimitPerMinute paces entity extraction requests
+// safely under the observed account ceiling for gpt-4o-mini (500
+// requests/min) — reasoned headroom, not the literal limit, since other
+// usage may share the same account and the exact ceiling can vary by
+// account/tier. See docs/DECISIONS.md.
+const entityExtractionRateLimitPerMinute = 450
 
 // NewOpenAIEntityExtractor builds an extractor for the given chat model
 // (e.g. gpt-4o-mini), authenticated with apiKey. A nil httpClient uses
@@ -96,10 +133,59 @@ func NewOpenAIEntityExtractor(apiKey, model string, httpClient *http.Client) *Op
 		httpClient = http.DefaultClient
 	}
 	return &OpenAIEntityExtractor{
-		apiKey:     apiKey,
-		model:      model,
-		baseURL:    "https://api.openai.com",
-		httpClient: httpClient,
+		apiKey:         apiKey,
+		model:          model,
+		baseURL:        "https://api.openai.com",
+		httpClient:     httpClient,
+		maxRetries:     5,
+		retryBaseDelay: time.Second,
+		limiter:        newRateLimiter(entityExtractionRateLimitPerMinute),
+	}
+}
+
+// rateLimiter paces calls to at most perMinute per minute, shared across
+// however many concurrent callers use it (see entityExtractionConcurrency
+// in matcher.go) — a simple virtual-scheduler token bucket: each caller
+// reserves the next available slot under a mutex, then sleeps until it
+// arrives, so the aggregate rate at which new requests start never
+// exceeds perMinute regardless of concurrency. perMinute <= 0 disables
+// limiting entirely (used in tests, where a handful of local httptest
+// calls have no real rate ceiling to respect).
+type rateLimiter struct {
+	mu       sync.Mutex
+	interval time.Duration
+	next     time.Time
+}
+
+func newRateLimiter(perMinute int) *rateLimiter {
+	if perMinute <= 0 {
+		return &rateLimiter{}
+	}
+	return &rateLimiter{interval: time.Minute / time.Duration(perMinute)}
+}
+
+func (rl *rateLimiter) wait(ctx context.Context) error {
+	if rl == nil || rl.interval <= 0 {
+		return nil
+	}
+
+	rl.mu.Lock()
+	now := time.Now()
+	if rl.next.Before(now) {
+		rl.next = now
+	}
+	delay := rl.next.Sub(now)
+	rl.next = rl.next.Add(rl.interval)
+	rl.mu.Unlock()
+
+	if delay <= 0 {
+		return nil
+	}
+	select {
+	case <-time.After(delay):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -139,7 +225,40 @@ type entityExtractionResult struct {
 	Entities []string `json:"entities"`
 }
 
+// ExtractEntities retries on a 429 (rate limited) response with
+// exponential backoff (retryBaseDelay * 2^attempt), up to maxRetries
+// times, before giving up. Every other error — including a non-429
+// non-200 status — fails immediately, since retrying those wouldn't help.
 func (c *OpenAIEntityExtractor) ExtractEntities(ctx context.Context, text string) ([]string, error) {
+	var lastErr error
+	for attempt := 0; attempt <= c.maxRetries; attempt++ {
+		entities, retryable, err := c.extractEntitiesOnce(ctx, text)
+		if err == nil {
+			return entities, nil
+		}
+		lastErr = err
+		if !retryable || attempt == c.maxRetries {
+			break
+		}
+		delay := c.retryBaseDelay * time.Duration(1<<attempt)
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return nil, lastErr
+}
+
+// extractEntitiesOnce makes a single attempt, first waiting for the
+// limiter to admit it. retryable is true only for a 429 response — the
+// signal OpenAI uses specifically to mean "you're going too fast", not
+// that anything is actually wrong with the request.
+func (c *OpenAIEntityExtractor) extractEntitiesOnce(ctx context.Context, text string) (entities []string, retryable bool, err error) {
+	if err := c.limiter.wait(ctx); err != nil {
+		return nil, false, err
+	}
+
 	reqBody, err := json.Marshal(openAIChatRequest{
 		Model: c.model,
 		Messages: []openAIChatMessage{
@@ -150,38 +269,38 @@ func (c *OpenAIEntityExtractor) ExtractEntities(ctx context.Context, text string
 		Temperature:    0,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("marshaling entity extraction request: %w", err)
+		return nil, false, fmt.Errorf("marshaling entity extraction request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.baseURL, "/")+"/v1/chat/completions", bytes.NewReader(reqBody))
 	if err != nil {
-		return nil, fmt.Errorf("building entity extraction request: %w", err)
+		return nil, false, fmt.Errorf("building entity extraction request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("calling OpenAI chat completions API: %w", err)
+		return nil, false, fmt.Errorf("calling OpenAI chat completions API: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return nil, fmt.Errorf("OpenAI chat completions API returned %s: %s", resp.Status, string(body))
+		return nil, resp.StatusCode == http.StatusTooManyRequests, fmt.Errorf("OpenAI chat completions API returned %s: %s", resp.Status, string(body))
 	}
 
 	var parsed openAIChatResponse
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return nil, fmt.Errorf("decoding chat completion response: %w", err)
+		return nil, false, fmt.Errorf("decoding chat completion response: %w", err)
 	}
 	if len(parsed.Choices) == 0 {
-		return nil, fmt.Errorf("chat completion response had no choices")
+		return nil, false, fmt.Errorf("chat completion response had no choices")
 	}
 
 	var result entityExtractionResult
 	if err := json.Unmarshal([]byte(parsed.Choices[0].Message.Content), &result); err != nil {
-		return nil, fmt.Errorf("parsing entity extraction JSON %q: %w", parsed.Choices[0].Message.Content, err)
+		return nil, false, fmt.Errorf("parsing entity extraction JSON %q: %w", parsed.Choices[0].Message.Content, err)
 	}
-	return result.Entities, nil
+	return result.Entities, false, nil
 }

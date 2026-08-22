@@ -3,7 +3,9 @@ package match
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
+	"sync"
 	"testing"
 	"time"
 
@@ -56,7 +58,7 @@ func TestMatchGroupsThreeVenuesTransitively(t *testing.T) {
 		"Market E": {1, 0}, // identical to D -> sim 1.0
 	}}
 
-	groups, _, err := Match(context.Background(), []normalize.Market{p, k, m, d, e}, embedder, fakeEntityExtractor{}, DefaultDateWindow)
+	groups, _, err := Match(context.Background(), []normalize.Market{p, k, m, d, e}, embedder, fakeEntityExtractor{}, DefaultDateWindow, nil)
 	if err != nil {
 		t.Fatalf("Match: %v", err)
 	}
@@ -95,7 +97,7 @@ func TestMatchNoCandidatesReturnsNilNotError(t *testing.T) {
 		{ID: "polymarket:2", Venue: "polymarket", Title: "B", ResolutionDate: base},
 	}
 
-	groups, _, err := Match(context.Background(), markets, fakeEmbedder{}, fakeEntityExtractor{}, DefaultDateWindow)
+	groups, _, err := Match(context.Background(), markets, fakeEmbedder{}, fakeEntityExtractor{}, DefaultDateWindow, nil)
 	if err != nil {
 		t.Fatalf("Match: %v", err)
 	}
@@ -113,7 +115,7 @@ func TestMatchThresholdExcludesWeakPairs(t *testing.T) {
 	// reasonable threshold even with perfect date alignment.
 	embedder := fakeEmbedder{vectors: map[string][]float64{"A": {1, 0}, "B": {0, 1}}}
 
-	groups, _, err := Match(context.Background(), []normalize.Market{a, b}, embedder, fakeEntityExtractor{}, DefaultDateWindow)
+	groups, _, err := Match(context.Background(), []normalize.Market{a, b}, embedder, fakeEntityExtractor{}, DefaultDateWindow, nil)
 	if err != nil {
 		t.Fatalf("Match: %v", err)
 	}
@@ -129,8 +131,183 @@ func TestMatchPropagatesEmbedderError(t *testing.T) {
 
 	embedder := fakeEmbedder{err: errors.New("api unavailable")}
 
-	if _, _, err := Match(context.Background(), []normalize.Market{a, b}, embedder, fakeEntityExtractor{}, DefaultDateWindow); err == nil {
+	if _, _, err := Match(context.Background(), []normalize.Market{a, b}, embedder, fakeEntityExtractor{}, DefaultDateWindow, nil); err == nil {
 		t.Fatal("expected an error when the embedder fails, got nil")
+	}
+}
+
+// callCountingEntityExtractor records how many times ExtractEntities was
+// called, to prove Match skips entity extraction entirely for candidates
+// that can't clear the tier floors on title+date alone (see Match's doc
+// comment and docs/DECISIONS.md on why this matters at real volume).
+type callCountingEntityExtractor struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (e *callCountingEntityExtractor) ExtractEntities(ctx context.Context, text string) ([]string, error) {
+	e.mu.Lock()
+	e.calls++
+	e.mu.Unlock()
+	return nil, nil
+}
+
+func TestMatchSkipsEntityExtractionBelowReviewFloors(t *testing.T) {
+	base := time.Date(2026, 3, 19, 0, 0, 0, 0, time.UTC)
+	a := normalize.Market{ID: "polymarket:1", Venue: "polymarket", Title: "A", ResolutionDate: base}
+	b := normalize.Market{ID: "kalshi:1", Venue: "kalshi", Title: "B", ResolutionDate: base}
+
+	// Orthogonal vectors -> title similarity 0, well below even the
+	// needs-review floor (0.65) despite perfect date alignment. An entity
+	// gate result couldn't change a TierNone outcome either way, so
+	// extraction should never run for this pair.
+	embedder := fakeEmbedder{vectors: map[string][]float64{"A": {1, 0}, "B": {0, 1}}}
+	extractor := &callCountingEntityExtractor{}
+
+	if _, _, err := Match(context.Background(), []normalize.Market{a, b}, embedder, extractor, DefaultDateWindow, nil); err != nil {
+		t.Fatalf("Match: %v", err)
+	}
+
+	extractor.mu.Lock()
+	calls := extractor.calls
+	extractor.mu.Unlock()
+	if calls != 0 {
+		t.Errorf("expected 0 entity extraction calls for a pair below the review floor, got %d", calls)
+	}
+}
+
+func TestMatchRunsEntityExtractionAtOrAboveReviewFloors(t *testing.T) {
+	base := time.Date(2026, 3, 19, 0, 0, 0, 0, time.UTC)
+	a := normalize.Market{ID: "polymarket:1", Venue: "polymarket", Title: "A", ResolutionDate: base}
+	b := normalize.Market{ID: "kalshi:1", Venue: "kalshi", Title: "B", ResolutionDate: base}
+
+	embedder := fakeEmbedder{vectors: map[string][]float64{"A": {1, 0}, "B": {1, 0}}} // identical -> sim 1.0
+	extractor := &callCountingEntityExtractor{}
+
+	if _, _, err := Match(context.Background(), []normalize.Market{a, b}, embedder, extractor, DefaultDateWindow, nil); err != nil {
+		t.Fatalf("Match: %v", err)
+	}
+
+	extractor.mu.Lock()
+	calls := extractor.calls
+	extractor.mu.Unlock()
+	if calls != 2 {
+		t.Errorf("expected 2 entity extraction calls (one per unique title) for a pair clearing the review floors, got %d", calls)
+	}
+}
+
+func TestMatchPropagatesEntityExtractorError(t *testing.T) {
+	base := time.Date(2026, 3, 19, 0, 0, 0, 0, time.UTC)
+	a := normalize.Market{ID: "polymarket:1", Venue: "polymarket", Title: "A", ResolutionDate: base}
+	b := normalize.Market{ID: "kalshi:1", Venue: "kalshi", Title: "B", ResolutionDate: base}
+
+	embedder := fakeEmbedder{vectors: map[string][]float64{"A": {1, 0}, "B": {1, 0}}}
+	extractor := fakeEntityExtractor{err: errors.New("api unavailable")}
+
+	if _, _, err := Match(context.Background(), []normalize.Market{a, b}, embedder, extractor, DefaultDateWindow, nil); err == nil {
+		t.Fatal("expected an error when the entity extractor fails, got nil")
+	}
+}
+
+func TestMatchReportsProgressForEntityExtraction(t *testing.T) {
+	base := time.Date(2026, 3, 19, 0, 0, 0, 0, time.UTC)
+	a := normalize.Market{ID: "polymarket:1", Venue: "polymarket", Title: "A", ResolutionDate: base}
+	b := normalize.Market{ID: "kalshi:1", Venue: "kalshi", Title: "B", ResolutionDate: base}
+
+	embedder := fakeEmbedder{vectors: map[string][]float64{"A": {1, 0}, "B": {1, 0}}}
+
+	var mu sync.Mutex
+	var calls [][2]int
+	progress := func(done, total int) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls = append(calls, [2]int{done, total})
+	}
+
+	if _, _, err := Match(context.Background(), []normalize.Market{a, b}, embedder, fakeEntityExtractor{}, DefaultDateWindow, progress); err != nil {
+		t.Fatalf("Match: %v", err)
+	}
+
+	// One candidate pair (A, B), two unique titles -> exactly two progress
+	// calls, however they're interleaved across workers.
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 progress calls (one per unique title), got %d: %+v", len(calls), calls)
+	}
+	last := calls[len(calls)-1]
+	if last[0] != 2 || last[1] != 2 {
+		t.Errorf("final progress call = %+v, want {2, 2}", last)
+	}
+}
+
+// concurrencyTrackingEntityExtractor records the maximum number of
+// ExtractEntities calls it ever observed in flight simultaneously, to
+// prove extractAllEntities actually runs work concurrently rather than one
+// call at a time.
+type concurrencyTrackingEntityExtractor struct {
+	mu      sync.Mutex
+	current int
+	max     int
+}
+
+func (e *concurrencyTrackingEntityExtractor) ExtractEntities(ctx context.Context, text string) ([]string, error) {
+	e.mu.Lock()
+	e.current++
+	if e.current > e.max {
+		e.max = e.current
+	}
+	e.mu.Unlock()
+
+	time.Sleep(20 * time.Millisecond)
+
+	e.mu.Lock()
+	e.current--
+	e.mu.Unlock()
+
+	return nil, nil
+}
+
+// constantEmbedder returns the same vector for every input text, so every
+// candidate pair scores title similarity 1.0 regardless of title — used
+// where a test needs every candidate to clear the tier floors and reach
+// the entity gate, not just survive the prefilter.
+type constantEmbedder struct{ vector []float64 }
+
+func (e constantEmbedder) Embed(ctx context.Context, texts []string) ([][]float64, error) {
+	out := make([][]float64, len(texts))
+	for i := range texts {
+		out[i] = e.vector
+	}
+	return out, nil
+}
+
+func TestExtractAllEntitiesRunsConcurrently(t *testing.T) {
+	base := time.Date(2026, 3, 19, 0, 0, 0, 0, time.UTC)
+	var markets []normalize.Market
+	// 20 markets per venue, all within the date window and (via
+	// constantEmbedder) title similarity 1.0 with each other, so every
+	// pair clears the tier floors and reaches the entity gate — every
+	// market needs its own extraction call, well beyond
+	// entityExtractionConcurrency (8), enough headroom to reliably
+	// observe more than one call in flight even under scheduling jitter.
+	for i := 0; i < 20; i++ {
+		markets = append(markets,
+			normalize.Market{ID: fmt.Sprintf("polymarket:%d", i), Venue: "polymarket", Title: fmt.Sprintf("Polymarket title %d", i), ResolutionDate: base},
+			normalize.Market{ID: fmt.Sprintf("kalshi:%d", i), Venue: "kalshi", Title: fmt.Sprintf("Kalshi title %d", i), ResolutionDate: base},
+		)
+	}
+
+	extractor := &concurrencyTrackingEntityExtractor{}
+	embedder := constantEmbedder{vector: []float64{1, 0}}
+	if _, _, err := Match(context.Background(), markets, embedder, extractor, DefaultDateWindow, nil); err != nil {
+		t.Fatalf("Match: %v", err)
+	}
+
+	extractor.mu.Lock()
+	max := extractor.max
+	extractor.mu.Unlock()
+
+	if max < 2 {
+		t.Errorf("max observed concurrent ExtractEntities calls = %d, want > 1 (entity extraction should run concurrently, not sequentially)", max)
 	}
 }
 
