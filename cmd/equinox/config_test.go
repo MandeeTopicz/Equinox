@@ -34,9 +34,6 @@ func TestLoadConfig(t *testing.T) {
 		}
 	}
 
-	if cfg.Match.MinScore != 0.75 {
-		t.Errorf("match.min_score = %v, want 0.75", cfg.Match.MinScore)
-	}
 	if cfg.Match.Embedding.Provider != "openai" {
 		t.Errorf("match.embedding.provider = %q, want openai", cfg.Match.Embedding.Provider)
 	}

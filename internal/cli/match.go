@@ -23,7 +23,6 @@ type MatchDeps struct {
 	Store      MatchStore
 	Embedder   match.Embedder
 	Extractor  match.EntityExtractor
-	MinScore   float64
 	DateWindow time.Duration
 	Verbose    bool // print a per-candidate-pair trace, including gate rejections
 	Out        io.Writer
@@ -40,6 +39,7 @@ type pairBreakdown struct {
 	DateAlignment     float64 `json:"date_alignment"`
 	CategoryMatch     float64 `json:"category_match"`
 	CategoryEvaluated bool    `json:"category_evaluated"`
+	Tier              string  `json:"tier"`
 }
 
 // Match runs equivalence detection over every canonical market currently in
@@ -61,7 +61,7 @@ func Match(ctx context.Context, deps MatchDeps) error {
 		markets = append(markets, toNormalizeMarket(r))
 	}
 
-	groups, traces, err := match.Match(ctx, markets, deps.Embedder, deps.Extractor, deps.MinScore, deps.DateWindow)
+	groups, traces, err := match.Match(ctx, markets, deps.Embedder, deps.Extractor, deps.DateWindow)
 	if err != nil {
 		return fmt.Errorf("matching: %w", err)
 	}
@@ -72,7 +72,14 @@ func Match(ctx context.Context, deps MatchDeps) error {
 
 	now := time.Now().UTC()
 	usedSlugs := map[string]bool{}
+	var matchedCount, reviewCount int
 	for _, g := range groups {
+		if g.Tier == match.TierMatched {
+			matchedCount++
+		} else {
+			reviewCount++
+		}
+
 		eventID := match.UniqueSlug(g.Members[0].Title, usedSlugs)
 		usedSlugs[eventID] = true
 
@@ -88,6 +95,7 @@ func Match(ctx context.Context, deps MatchDeps) error {
 				Composite: p.Score.Composite, TitleSimilarity: p.Score.TitleSimilarity,
 				DateAlignment: p.Score.DateAlignment, CategoryMatch: p.Score.CategoryMatch,
 				CategoryEvaluated: p.Score.CategoryEvaluated,
+				Tier:              match.ClassifyTier(p.Score.TitleSimilarity, p.Score.DateAlignment).String(),
 			}
 		}
 		signalsJSON, err := json.Marshal(breakdown)
@@ -96,9 +104,16 @@ func Match(ctx context.Context, deps MatchDeps) error {
 		}
 
 		_, err = deps.Store.InsertMatchDecision(ctx, store.MatchDecision{
-			EventID:         eventID,
-			CreatedAt:       now,
-			MinScore:        deps.MinScore,
+			EventID:   eventID,
+			CreatedAt: now,
+			// MinScore is vestigial: matching no longer gates on a single
+			// tunable threshold (see docs/DECISIONS.md on why --min-score
+			// was retired in favor of fixed conjunctive tier floors). Kept
+			// at the review tier's title floor — the lowest bar any
+			// persisted pair had to clear at all — for schema continuity
+			// rather than a migration; the actual gate is match.Tier,
+			// derived from TitleSimilarity/DateAlignment at read time.
+			MinScore:        match.ReviewTitleFloor,
 			Score:           g.Score,
 			TitleSimilarity: g.TitleSimilarity,
 			DateAlignment:   g.DateAlignment,
@@ -111,7 +126,7 @@ func Match(ctx context.Context, deps MatchDeps) error {
 		}
 	}
 
-	fmt.Fprintf(deps.Out, "matched %d cross-venue groups (min-score %.2f)\n", len(groups), deps.MinScore)
+	fmt.Fprintf(deps.Out, "matched %d cross-venue groups (%d matched, %d needs review)\n", len(groups), matchedCount, reviewCount)
 	return nil
 }
 
@@ -123,10 +138,10 @@ func printMatchTrace(out io.Writer, traces []match.Trace) {
 		switch {
 		case t.Reason != "":
 			fmt.Fprintf(out, "  rejected: %s\n", t.Reason)
-		case t.Passed:
-			fmt.Fprintf(out, "  matched: score %.2f\n", t.Score)
+		case t.Tier == match.TierNone:
+			fmt.Fprintf(out, "  below review floors: score %.2f\n", t.Score)
 		default:
-			fmt.Fprintf(out, "  below threshold: score %.2f\n", t.Score)
+			fmt.Fprintf(out, "  %s: score %.2f\n", t.Tier, t.Score)
 		}
 	}
 }

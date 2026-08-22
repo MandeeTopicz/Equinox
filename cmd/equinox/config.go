@@ -20,8 +20,12 @@ type VenueConfig struct {
 	APIKeyEnv string `yaml:"api_key_env"`
 }
 
+// MatchConfig no longer carries a min_score field: matching used to gate on
+// a single tunable compensatory threshold, retired in favor of fixed
+// conjunctive tier floors (match.MatchedTitleFloor etc. — see
+// docs/DECISIONS.md for why). There's nothing left here to configure per
+// deployment; changing the floors is a code change, not a config value.
 type MatchConfig struct {
-	MinScore         float64                `yaml:"min_score"`
 	Embedding        EmbeddingConfig        `yaml:"embedding"`
 	EntityExtraction EntityExtractionConfig `yaml:"entity_extraction"`
 }

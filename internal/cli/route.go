@@ -9,6 +9,7 @@ import (
 	"io"
 	"time"
 
+	"equinox/internal/match"
 	"equinox/internal/normalize"
 	"equinox/internal/route"
 	"equinox/internal/store"
@@ -32,7 +33,12 @@ type RouteDeps struct {
 // a raw canonical market id, logged as a single-venue no-op since there is
 // nothing to compare against. If neither resolves, that's a real error —
 // see docs/ROUTING.md's "If --event refers to..." clarification.
-func Route(ctx context.Context, deps RouteDeps, eventID, side string, size float64) error {
+//
+// A matched-group event whose tier is "needs review" (docs/EQUIVALENCE.md)
+// refuses to route unless confirmReview is true — routing a group the
+// matcher itself flagged as not confident enough shouldn't be something
+// that happens by accident.
+func Route(ctx context.Context, deps RouteDeps, eventID, side string, size float64, confirmReview bool) error {
 	if eventID == "" {
 		return fmt.Errorf("event id is required")
 	}
@@ -46,7 +52,7 @@ func Route(ctx context.Context, deps RouteDeps, eventID, side string, size float
 	md, err := deps.Store.LatestMatchDecision(ctx, eventID)
 	switch {
 	case err == nil:
-		return routeMatchedGroup(ctx, deps, md, side, size)
+		return routeMatchedGroup(ctx, deps, md, side, size, confirmReview)
 	case errors.Is(err, sql.ErrNoRows):
 		return routeSingleMarketNoop(ctx, deps, eventID, side, size)
 	default:
@@ -54,7 +60,12 @@ func Route(ctx context.Context, deps RouteDeps, eventID, side string, size float
 	}
 }
 
-func routeMatchedGroup(ctx context.Context, deps RouteDeps, md store.MatchDecision, side string, size float64) error {
+func routeMatchedGroup(ctx context.Context, deps RouteDeps, md store.MatchDecision, side string, size float64, confirmReview bool) error {
+	tier := match.ClassifyTier(md.TitleSimilarity, md.DateAlignment)
+	if tier != match.TierMatched && !confirmReview {
+		return fmt.Errorf("event %q is %q (score %.2f), not \"matched\" — not confident enough to route automatically; re-run with --confirm-review to route anyway, acknowledging this hasn't cleared the matched threshold", md.EventID, tier, md.Score)
+	}
+
 	var members []normalize.Market
 	for _, mm := range md.Members {
 		cm, err := deps.Store.GetCanonicalMarket(ctx, mm.CanonicalMarketID)

@@ -11,6 +11,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"equinox/internal/match"
 	"equinox/internal/route"
 	"equinox/internal/store"
 )
@@ -116,20 +117,22 @@ func ShowMatches(ctx context.Context, st ShowMatchesStore, out io.Writer, eventF
 	}
 
 	tw := newTableWriter(out)
-	fmt.Fprintln(tw, "event\tvenues\tscore")
+	fmt.Fprintln(tw, "event\tvenues\tscore\ttier")
 	for _, r := range rows {
 		venues := make([]string, len(r.Members))
 		for i, m := range r.Members {
 			venues[i] = m.Venue
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%.2f\n", r.EventID, strings.Join(venues, ", "), r.Score)
+		tier := match.ClassifyTier(r.TitleSimilarity, r.DateAlignment)
+		fmt.Fprintf(tw, "%s\t%s\t%.2f\t%s\n", r.EventID, strings.Join(venues, ", "), r.Score, tier)
 	}
 	return tw.Flush()
 }
 
 func printMatchDetail(out io.Writer, d store.MatchDecision) error {
+	tier := match.ClassifyTier(d.TitleSimilarity, d.DateAlignment)
 	fmt.Fprintf(out, "event: %s\n", d.EventID)
-	fmt.Fprintf(out, "score: %.2f (min-score threshold: %.2f)\n", d.Score, d.MinScore)
+	fmt.Fprintf(out, "score: %.2f (tier: %s)\n", d.Score, tier)
 	fmt.Fprintf(out, "signals: title_similarity=%.2f  date_alignment=%.2f  category_match=%.2f\n\n",
 		d.TitleSimilarity, d.DateAlignment, d.CategoryMatch)
 
