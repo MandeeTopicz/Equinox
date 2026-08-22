@@ -6,8 +6,10 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"time"
 
 	"equinox/internal/cli"
 	"equinox/internal/match"
@@ -72,6 +74,25 @@ func newEmbedder(cfg *Config) (match.Embedder, error) {
 	return match.NewOpenAIEmbeddingClient(apiKey, cfg.Match.Embedding.Model, &http.Client{Timeout: httpClientTimeout}), nil
 }
 
+// entityExtractionProgress builds a match.Progress callback that prints a
+// throttled status line to w while entity extraction runs — otherwise a
+// large candidate set produces zero output for the full duration, which is
+// indistinguishable from a hang (see docs/DECISIONS.md on the bounded-
+// concurrency fix this accompanies). Printed to stderr, not stdout, so it
+// never mixes into the pipeline's actual result output; always prints the
+// final line so a run's last visible progress line matches its true total.
+func entityExtractionProgress(w io.Writer) func(done, total int) {
+	var last time.Time
+	return func(done, total int) {
+		now := time.Now()
+		if done != total && now.Sub(last) < 3*time.Second {
+			return
+		}
+		last = now
+		fmt.Fprintf(w, "extracting entities: %d/%d\n", done, total)
+	}
+}
+
 func newEntityExtractor(cfg *Config) (match.EntityExtractor, error) {
 	apiKey, err := cfg.Match.EntityExtraction.APIKey()
 	if err != nil {
@@ -123,6 +144,7 @@ func runMatch(cfg *Config, args []string) error {
 		Extractor:  extractor,
 		DateWindow: match.DefaultDateWindow,
 		Verbose:    *verbose,
+		Progress:   entityExtractionProgress(os.Stderr),
 		Out:        os.Stdout,
 	})
 }
@@ -189,6 +211,7 @@ func runRun(cfg *Config, args []string) error {
 		Side:          *side,
 		Size:          float64(*size),
 		ConfirmReview: *confirmReview,
+		Progress:      entityExtractionProgress(os.Stderr),
 		Out:           os.Stdout,
 	})
 }

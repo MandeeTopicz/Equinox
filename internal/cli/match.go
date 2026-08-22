@@ -25,7 +25,12 @@ type MatchDeps struct {
 	Extractor  match.EntityExtractor
 	DateWindow time.Duration
 	Verbose    bool // print a per-candidate-pair trace, including gate rejections
-	Out        io.Writer
+	// Progress, if non-nil, is called during entity extraction with
+	// (completed, total) unique candidate markets processed — the
+	// pipeline's slowest step at real fetch-coverage volume. Optional:
+	// nil skips progress reporting (e.g. in tests).
+	Progress func(done, total int)
+	Out      io.Writer
 }
 
 // pairBreakdown is one qualifying pairwise edge's full signal breakdown,
@@ -61,7 +66,7 @@ func Match(ctx context.Context, deps MatchDeps) error {
 		markets = append(markets, toNormalizeMarket(r))
 	}
 
-	groups, traces, err := match.Match(ctx, markets, deps.Embedder, deps.Extractor, deps.DateWindow)
+	groups, traces, err := match.Match(ctx, markets, deps.Embedder, deps.Extractor, deps.DateWindow, deps.Progress)
 	if err != nil {
 		return fmt.Errorf("matching: %w", err)
 	}

@@ -30,7 +30,8 @@ type RunDeps struct {
 	Event         string // optional; empty means auto-select the highest-confidence match
 	Side          string
 	Size          float64
-	ConfirmReview bool // required to route an explicit Event that's only "needs review" tier; ignored during auto-select, which never picks a needs-review group
+	ConfirmReview bool                  // required to route an explicit Event that's only "needs review" tier; ignored during auto-select, which never picks a needs-review group
+	Progress      func(done, total int) // forwarded to the match step; see MatchDeps.Progress
 	Out           io.Writer
 }
 
@@ -51,7 +52,7 @@ func Run(ctx context.Context, deps RunDeps) error {
 	}
 
 	if err := Match(ctx, MatchDeps{
-		Store: deps.Store, Embedder: deps.Embedder, Extractor: deps.Extractor, DateWindow: deps.DateWindow, Out: deps.Out,
+		Store: deps.Store, Embedder: deps.Embedder, Extractor: deps.Extractor, DateWindow: deps.DateWindow, Progress: deps.Progress, Out: deps.Out,
 	}); err != nil {
 		return err
 	}
