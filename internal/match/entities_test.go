@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -185,5 +186,83 @@ func TestOpenAIEntityExtractorHTTPError(t *testing.T) {
 
 	if _, err := extractor.ExtractEntities(context.Background(), "x"); err == nil {
 		t.Fatal("expected error for non-200 response, got nil")
+	}
+}
+
+func TestOpenAIEntityExtractorRetriesOn429(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&attempts, 1) <= 2 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(`{"error":{"message":"rate limit reached"}}`))
+			return
+		}
+		resp := openAIChatResponse{}
+		resp.Choices = []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		}{{}}
+		resp.Choices[0].Message.Content = `{"entities": []}`
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	extractor := NewOpenAIEntityExtractor("test-key", "gpt-4o-mini", nil)
+	extractor.baseURL = server.URL
+	extractor.retryBaseDelay = time.Millisecond // keep the test fast
+	extractor.limiter = newRateLimiter(0)       // no real rate ceiling to respect against a local httptest server
+
+	if _, err := extractor.ExtractEntities(context.Background(), "x"); err != nil {
+		t.Fatalf("ExtractEntities: %v", err)
+	}
+	if got := atomic.LoadInt32(&attempts); got != 3 {
+		t.Errorf("expected 3 attempts (2 rate-limited + 1 success), got %d", got)
+	}
+}
+
+func TestOpenAIEntityExtractorGivesUpAfterMaxRetriesOn429(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte(`{"error":{"message":"rate limit reached"}}`))
+	}))
+	defer server.Close()
+
+	extractor := NewOpenAIEntityExtractor("test-key", "gpt-4o-mini", nil)
+	extractor.baseURL = server.URL
+	extractor.retryBaseDelay = time.Millisecond
+	extractor.limiter = newRateLimiter(0)
+	extractor.maxRetries = 2
+
+	if _, err := extractor.ExtractEntities(context.Background(), "x"); err == nil {
+		t.Fatal("expected an error after exhausting retries on persistent 429s, got nil")
+	}
+	if got := atomic.LoadInt32(&attempts); got != 3 { // 1 initial + 2 retries
+		t.Errorf("expected 3 total attempts (1 + maxRetries), got %d", got)
+	}
+}
+
+func TestOpenAIEntityExtractorDoesNotRetryNon429Errors(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":"invalid api key"}`))
+	}))
+	defer server.Close()
+
+	extractor := NewOpenAIEntityExtractor("bad-key", "gpt-4o-mini", nil)
+	extractor.baseURL = server.URL
+	extractor.retryBaseDelay = time.Millisecond
+	extractor.limiter = newRateLimiter(0)
+
+	if _, err := extractor.ExtractEntities(context.Background(), "x"); err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if got := atomic.LoadInt32(&attempts); got != 1 {
+		t.Errorf("expected exactly 1 attempt (no retry for a non-429 error), got %d", got)
 	}
 }
