@@ -11,6 +11,10 @@ func market(venue string, yesPrice, noPrice, liquidity float64) normalize.Market
 	return normalize.Market{Venue: venue, YesPrice: yesPrice, NoPrice: noPrice, Liquidity: liquidity}
 }
 
+func marketWithID(venue, marketID string, yesPrice, noPrice, liquidity float64) normalize.Market {
+	return normalize.Market{Venue: venue, VenueMarketID: marketID, YesPrice: yesPrice, NoPrice: noPrice, Liquidity: liquidity}
+}
+
 func TestRouteSelectsBestPriceAmongLiquidVenues(t *testing.T) {
 	// Matches the scenario in README.md's example session.
 	members := []normalize.Market{
@@ -110,6 +114,49 @@ func TestRouteNoVenueHasSufficientLiquidity(t *testing.T) {
 	}
 	if !strings.Contains(d.Rationale, "no venue could support") {
 		t.Errorf("expected a no-venue-qualifies rationale, got %q", d.Rationale)
+	}
+}
+
+func TestRouteRationaleDisambiguatesSameVenueByMarketID(t *testing.T) {
+	// A connected-component match group can contain more than one market
+	// from the same venue (EQUIVALENCE.md's "Grouping more than two
+	// venues") — the rationale must distinguish them, not just say
+	// "kalshi" twice.
+	members := []normalize.Market{
+		marketWithID("kalshi", "AAA", 0.05, 0.95, 1000), // best price, sufficient liquidity -> selected
+		marketWithID("kalshi", "BBB", 0.07, 0.93, 5),    // insufficient liquidity -> excluded
+	}
+
+	d, err := Route(members, "yes", 100)
+	if err != nil {
+		t.Fatalf("Route: %v", err)
+	}
+	if d.SelectedVenue != "kalshi" {
+		t.Errorf("SelectedVenue = %q, want kalshi", d.SelectedVenue)
+	}
+	if !strings.Contains(d.Rationale, "selected: kalshi (AAA)") {
+		t.Errorf("expected the selected quote disambiguated by market id, got %q", d.Rationale)
+	}
+	if !strings.Contains(d.Rationale, "kalshi (BBB) excluded on liquidity") {
+		t.Errorf("expected the excluded quote disambiguated by market id, got %q", d.Rationale)
+	}
+}
+
+func TestRouteRationaleOmitsMarketIDWhenVenueUnambiguous(t *testing.T) {
+	members := []normalize.Market{
+		marketWithID("kalshi", "AAA", 0.62, 0.38, 1000),
+		marketWithID("polymarket", "BBB", 0.65, 0.35, 1000),
+	}
+
+	d, err := Route(members, "yes", 100)
+	if err != nil {
+		t.Fatalf("Route: %v", err)
+	}
+	if !strings.Contains(d.Rationale, "selected: kalshi —") {
+		t.Errorf("expected a bare venue name when there's no same-venue ambiguity, got %q", d.Rationale)
+	}
+	if strings.Contains(d.Rationale, "(AAA)") || strings.Contains(d.Rationale, "(BBB)") {
+		t.Errorf("did not expect market id disambiguation when each venue appears once: %q", d.Rationale)
 	}
 }
 

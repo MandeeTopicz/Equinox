@@ -13,9 +13,16 @@ import (
 // VenueQuote is one venue's evaluation for a requested order, read only
 // from canonical fields that exist identically across every venue
 // implementation (docs/ROUTING.md) — Route never branches on venue
-// identity or name.
+// identity or name. MarketID (the venue-native ticker/id, not the
+// canonical venue:id form — venue is already a separate field) exists
+// specifically to disambiguate a match group containing more than one
+// market from the same venue (connected-component grouping can produce
+// this — see EQUIVALENCE.md's "Grouping more than two venues"); without
+// it, two same-venue rows are otherwise indistinguishable by venue name
+// alone.
 type VenueQuote struct {
 	Venue       string  `json:"venue"`
+	MarketID    string  `json:"market_id,omitempty"`
 	Price       float64 `json:"price"`
 	Liquidity   float64 `json:"liquidity"`
 	LiquidityOK bool    `json:"liquidity_ok"`
@@ -58,7 +65,7 @@ func Route(members []normalize.Market, side string, size float64) (Decision, err
 		}
 
 		liquidityOK := m.Liquidity >= size
-		quotes[i] = VenueQuote{Venue: m.Venue, Price: price, Liquidity: m.Liquidity, LiquidityOK: liquidityOK}
+		quotes[i] = VenueQuote{Venue: m.Venue, MarketID: m.VenueMarketID, Price: price, Liquidity: m.Liquidity, LiquidityOK: liquidityOK}
 
 		if !liquidityOK {
 			continue
@@ -84,7 +91,25 @@ func Route(members []normalize.Market, side string, size float64) (Decision, err
 	}, nil
 }
 
+// rationale builds the one-line summary. Quotes are labeled by bare venue
+// name except where a group has more than one market from the same venue
+// (see VenueQuote.MarketID) — there, every quote for that venue is
+// labeled "venue (marketID)" instead, since "kalshi ...; kalshi excluded
+// on liquidity" would otherwise read as a contradiction rather than two
+// different markets. Single-market-per-venue groups — the overwhelming
+// common case — see no change from this.
 func rationale(quotes []VenueQuote, side string) string {
+	venueCounts := map[string]int{}
+	for _, q := range quotes {
+		venueCounts[q.Venue]++
+	}
+	label := func(q VenueQuote) string {
+		if venueCounts[q.Venue] > 1 && q.MarketID != "" {
+			return fmt.Sprintf("%s (%s)", q.Venue, q.MarketID)
+		}
+		return q.Venue
+	}
+
 	var selected VenueQuote
 	var found bool
 	var otherPrices []string
@@ -95,9 +120,9 @@ func rationale(quotes []VenueQuote, side string) string {
 		case q.Selected:
 			selected, found = q, true
 		case !q.LiquidityOK:
-			excludedOnLiquidity = append(excludedOnLiquidity, q.Venue)
+			excludedOnLiquidity = append(excludedOnLiquidity, label(q))
 		default:
-			otherPrices = append(otherPrices, fmt.Sprintf("%s %.2f", q.Venue, q.Price))
+			otherPrices = append(otherPrices, fmt.Sprintf("%s %.2f", label(q), q.Price))
 		}
 	}
 
@@ -105,7 +130,7 @@ func rationale(quotes []VenueQuote, side string) string {
 		return fmt.Sprintf("no venue could support the requested size on the %s side; all excluded on liquidity", side)
 	}
 
-	msg := fmt.Sprintf("selected: %s — best %s price at requested size (%.2f", selected.Venue, strings.ToUpper(side), selected.Price)
+	msg := fmt.Sprintf("selected: %s — best %s price at requested size (%.2f", label(selected), strings.ToUpper(side), selected.Price)
 	if len(otherPrices) > 0 {
 		msg += " vs. " + strings.Join(otherPrices, ", ")
 	}
