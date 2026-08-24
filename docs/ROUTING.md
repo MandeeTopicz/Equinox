@@ -47,15 +47,15 @@ Each routing decision is logged as a comparison table across all venues in the m
 event: fed-march-2026-cut
 side: yes, size: 100
 
-venue       price   liquidity_ok   selected
-kalshi      0.62    yes            yes  <- best price at requested size
-polymarket  0.65    yes            no
-manifold    0.60    no             no   <- insufficient liquidity at size 100
+venue       market_id     price   liquidity_ok   selected
+kalshi      FED-26MAR-T3  0.62    yes            yes  <- best price at requested size
+polymarket  0x9f2a1c      0.65    yes            no
+manifold    aB3xQ7        0.60    no             no   <- insufficient liquidity at size 100
 
 selected: kalshi — best YES price at requested size (0.62 vs. 0.65); manifold excluded on liquidity
 ```
 
-This table is what gets written to `routing_decisions` — not just the winner, but every venue considered and why it did or didn't win.
+This table is what gets written to `routing_decisions` — not just the winner, but every venue considered and why it did or didn't win. `market_id` is the venue-native ticker/id (see [ARCHITECTURE.md](ARCHITECTURE.md)'s canonical `Market` model) — mostly redundant with `venue` when a group has one market per venue, as above, but load-bearing when it doesn't: connected-component grouping (see [EQUIVALENCE.md](EQUIVALENCE.md)) can put more than one market from the *same* venue in one group, and without a market id the table (and the one-line rationale) would have no way to tell two same-venue rows apart. The rationale line itself only spells out `venue (marketID)` when that ambiguity actually exists — a single-market-per-venue group like the one above reads exactly as it always has.
 
 ## Out of scope
 
