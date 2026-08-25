@@ -132,7 +132,7 @@ func routeSingleMarketNoop(ctx context.Context, deps RouteDeps, eventID, side st
 
 	rationale := fmt.Sprintf("no match group for %s; single-venue no-op — only %s available (%s price %.2f)", eventID, cm.Venue, side, price)
 
-	quotes := []route.VenueQuote{{Venue: cm.Venue, Price: price, Liquidity: cm.Liquidity, LiquidityOK: cm.Liquidity >= size}}
+	quotes := []route.VenueQuote{{Venue: cm.Venue, MarketID: cm.VenueMarketID, Price: price, Liquidity: cm.Liquidity, LiquidityOK: cm.Liquidity >= size}}
 	comparisonJSON, err := json.Marshal(quotes)
 	if err != nil {
 		return fmt.Errorf("marshaling comparison: %w", err)

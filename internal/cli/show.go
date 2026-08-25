@@ -201,7 +201,7 @@ func printDecisionDetail(out io.Writer, d store.RoutingDecision) error {
 	}
 
 	tw := newTableWriter(out)
-	fmt.Fprintln(tw, "venue\tprice\tliquidity_ok\tselected")
+	fmt.Fprintln(tw, "venue\tmarket_id\tprice\tliquidity_ok\tselected")
 	for _, q := range quotes {
 		note := ""
 		switch {
@@ -210,7 +210,7 @@ func printDecisionDetail(out io.Writer, d store.RoutingDecision) error {
 		case !q.LiquidityOK:
 			note = fmt.Sprintf("  <- insufficient liquidity at size %v", d.Size)
 		}
-		fmt.Fprintf(tw, "%s\t%.2f\t%s\t%s%s\n", q.Venue, q.Price, yesNo(q.LiquidityOK), yesNo(q.Selected), note)
+		fmt.Fprintf(tw, "%s\t%s\t%.2f\t%s\t%s%s\n", q.Venue, q.MarketID, q.Price, yesNo(q.LiquidityOK), yesNo(q.Selected), note)
 	}
 	if err := tw.Flush(); err != nil {
 		return err
